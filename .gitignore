@@ -8,5 +8,5 @@ yarn.lock
 .idea
 coverage
 */spec/results
-
+src/log/
 
