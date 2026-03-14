@@ -11,10 +11,12 @@ require 'time'
 StackServiceBase.rack_setup self
 
 DEFAULT_UPSTREAM_PORT = 80
-PROXY_MAP = ENV.fetch 'PROXY_MAP', '/test1:localhost:9293,/test2:localhost:9293' #"/prefix:host[:port]"
+PROXY_MAP = ENV.fetch 'PROXY_MAP', '/:localhost:9293,/test2:localhost:9293' #"/prefix:host[:port]"
 BASE_URL = ENV.fetch 'BASE_URL', 'http://localhost:9287'
 REQUEST_RESPONSE_LOG_DIR = ENV.fetch('REQUEST_RESPONSE_LOG_DIR', File.expand_path('log/request_responses', __dir__))
 REQUEST_RESPONSE_LOG_BODY_LIMIT = Integer(ENV.fetch('REQUEST_RESPONSE_LOG_BODY_LIMIT', '4096'), exception: false) || 4096
+REQUEST_RESPONSE_LOG_TTL_SECONDS = Integer(ENV.fetch('REQUEST_RESPONSE_LOG_TTL_SECONDS', '3600'), exception: false) || 3600
+REQUEST_RESPONSE_LOG_CLEANUP_INTERVAL_SECONDS = Integer(ENV.fetch('REQUEST_RESPONSE_LOG_CLEANUP_INTERVAL_SECONDS', '300'), exception: false) || 300
 BINARY_CONTENT_TYPE_PATTERN = /octet-stream|x-protobuf|image|video|audio|font|pdf|zip/
 BODYLESS_METHODS = %i[get head delete options].freeze
 REQUEST_HEADERS_TO_SKIP = %w[host connection proxy-connection content-length accept-encoding].freeze
@@ -38,6 +40,9 @@ configure do
     end
   }
   set :request_response_log_dir, REQUEST_RESPONSE_LOG_DIR
+  set :request_response_log_ttl_seconds, REQUEST_RESPONSE_LOG_TTL_SECONDS
+  set :request_response_log_cleanup_interval_seconds, REQUEST_RESPONSE_LOG_CLEANUP_INTERVAL_SECONDS
+  set :request_response_log_last_cleanup_at, Time.at(0)
 
   FileUtils.mkdir_p settings.request_response_log_dir
 end
@@ -54,7 +59,9 @@ end
 
 helpers do
   def proxy_request
-    prefix, client = settings.http_clients.find { |prefix, _| request.path_info.start_with?(prefix) }
+    prefix, client = settings.http_clients
+                            .select { |prefix, _| request.path_info.start_with?(prefix) }
+                            .max_by { |prefix, _| prefix.length }
     halt 404, "Proxy not found for path: #{request.path_info}" unless prefix && client
 
     method = request.request_method.downcase.to_sym
@@ -125,6 +132,8 @@ helpers do
   end
 
   def append_request_response_log(entry, response_body:, response_content_type:)
+    cleanup_expired_log_files_if_needed
+
     timestamp = Time.now.utc
     basename = "#{timestamp.strftime('%Y%m%dT%H%M%S%6N')}_#{SecureRandom.uuid}"
     save_binary_response_body(basename, response_body, response_content_type, entry[:response])
@@ -149,6 +158,29 @@ helpers do
     return '.pb' if subtype == 'x-protobuf'
 
     ".#{subtype.gsub(/[^a-z0-9.-]/, '_')}"
+  end
+
+  def cleanup_expired_log_files_if_needed
+    ttl = settings.request_response_log_ttl_seconds
+    return if ttl <= 0
+
+    now = Time.now
+    return if now - settings.request_response_log_last_cleanup_at < settings.request_response_log_cleanup_interval_seconds
+
+    settings.request_response_log_last_cleanup_at = now
+    delete_logs_older_than(now - ttl)
+  end
+
+  def delete_logs_older_than(cutoff_time)
+    Dir.children(settings.request_response_log_dir).each do |filename|
+      path = File.join(settings.request_response_log_dir, filename)
+      next unless File.file?(path)
+      next unless File.mtime(path) < cutoff_time
+
+      File.delete(path)
+    rescue Errno::ENOENT
+      next
+    end
   end
 end
 
