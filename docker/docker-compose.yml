@@ -1,10 +1,12 @@
 services:
   rest_gate:
-    image: ${REGISTRY_HOST}/rest_gate/${CI_COMMIT_BRANCH}
+    image: ${REGISTRY_HOST}/rest-gate
     build:
       context: ../src
-      additional_contexts:
-        docker: ../docker
       dockerfile: ../docker/ruby/Dockerfile
+      cache_from:
+        - type=gha,scope=rest-gate
+      cache_to:
+        - type=gha,scope=rest-gate,mode=max
     ports:
-      - "7000:7000"
+      - 7000:7000

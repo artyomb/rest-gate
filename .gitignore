@@ -9,4 +9,5 @@ yarn.lock
 coverage
 */spec/results
 src/log/
+AGENTS.md
 
