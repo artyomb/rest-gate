@@ -7,12 +7,13 @@ require 'json'
 require 'fileutils'
 require 'securerandom'
 require 'time'
+require 'uri'
 
 StackServiceBase.rack_setup self
 
 DEFAULT_UPSTREAM_PORT = 80
-PROXY_MAP = ENV.fetch 'PROXY_MAP', '/:localhost:9293,/test2:localhost:9293' #"/prefix:host[:port]"
-BASE_URL = ENV.fetch 'BASE_URL', 'http://localhost:9287'
+PROXY_MAP = ENV.fetch 'PROXY_MAP', '/api:https://weather.giscloud.ru/roshydro/api' # "/prefix:host[:port]" or "/prefix:https://host[:port]/base/path"
+BASE_URL = ENV.fetch 'BASE_URL', 'http://localhost:9287'   #http://grib:9287/api    http://grib:9287/roshydro
 REQUEST_RESPONSE_LOG_DIR = ENV.fetch('REQUEST_RESPONSE_LOG_DIR', File.expand_path('log/request_responses', __dir__))
 REQUEST_RESPONSE_LOG_BODY_LIMIT = Integer(ENV.fetch('REQUEST_RESPONSE_LOG_BODY_LIMIT', '4096'), exception: false) || 4096
 REQUEST_RESPONSE_LOG_TTL_SECONDS = Integer(ENV.fetch('REQUEST_RESPONSE_LOG_TTL_SECONDS', '3600'), exception: false) || 3600
@@ -23,21 +24,64 @@ REQUEST_HEADERS_TO_SKIP = %w[host connection proxy-connection content-length acc
 RESPONSE_HEADERS_TO_SKIP = %w[connection proxy-connection transfer-encoding content-length].freeze
 
 def parse_proxy_map(proxy_map)
-  proxy_map.gsub(/\s+/, '').split(',').to_h do |entry|
-    prefix, host, port = entry.split(':', 3)
-    [prefix, { host:, port: (port || DEFAULT_UPSTREAM_PORT).to_i }]
-  end
+  proxy_map.gsub(/\s+/, '').split(',').reject(&:empty?).to_h { parse_proxy_map_entry(_1) }
+end
+
+def parse_proxy_map_entry(entry)
+  prefix, upstream = entry.split(':', 2)
+  raise ArgumentError, "Invalid PROXY_MAP entry: #{entry}" if prefix.to_s.empty? || upstream.to_s.empty?
+
+  [prefix, parse_upstream_target(upstream)]
+end
+
+def parse_upstream_target(upstream)
+  return parse_url_upstream_target(upstream) if upstream.include?('://')
+
+  host, port = upstream.split(':', 2)
+  port = (port || DEFAULT_UPSTREAM_PORT).to_i
+
+  {
+    scheme: 'http',
+    host:,
+    port:,
+    path_prefix: '',
+    url: "http://#{host}:#{port}"
+  }
+end
+
+def parse_url_upstream_target(upstream)
+  uri = URI.parse(upstream)
+  raise ArgumentError, "Invalid upstream URL in PROXY_MAP: #{upstream}" if uri.scheme.to_s.empty? || uri.host.to_s.empty?
+
+  {
+    scheme: uri.scheme,
+    host: uri.host,
+    port: uri.port,
+    path_prefix: normalize_upstream_path_prefix(uri.path),
+    url: uri.to_s.sub(%r{/$}, '')
+  }
+end
+
+def normalize_upstream_path_prefix(path)
+  path = path.to_s
+  return '' if path.empty? || path == '/'
+
+  "/#{path}".gsub(%r{/+}, '/').sub(%r{/$}, '')
 end
 
 configure do
   proxy_map = parse_proxy_map(PROXY_MAP)
   set :http_clients, proxy_map.transform_values {
-    Faraday.new url: "http://#{_1.fetch(:host)}:#{_1.fetch(:port)}" do |f|
-      f.request  :retry, max: 2, interval: 0.2, backoff_factor: 2
-      f.options.timeout      = 15
-      f.options.open_timeout = 10
-      f.adapter :net_http_persistent, pool_size: 10, idle_timeout: 60
-    end
+    {
+      path_prefix: _1.fetch(:path_prefix),
+      url: _1.fetch(:url),
+      connection: Faraday.new(url: "#{_1.fetch(:scheme)}://#{_1.fetch(:host)}:#{_1.fetch(:port)}") do |f|
+        f.request  :retry, max: 2, interval: 0.2, backoff_factor: 2
+        f.options.timeout      = 15
+        f.options.open_timeout = 10
+        f.adapter :net_http_persistent, pool_size: 10, idle_timeout: 60
+      end
+    }
   }
   set :request_response_log_dir, REQUEST_RESPONSE_LOG_DIR
   set :request_response_log_ttl_seconds, REQUEST_RESPONSE_LOG_TTL_SECONDS
@@ -59,15 +103,16 @@ end
 
 helpers do
   def proxy_request
-    prefix, client = settings.http_clients
-                            .select { |prefix, _| request.path_info.start_with?(prefix) }
-                            .max_by { |prefix, _| prefix.length }
-    halt 404, "Proxy not found for path: #{request.path_info}" unless prefix && client
+    prefix, upstream = settings.http_clients
+                               .select { |path_prefix, _| request.path_info.start_with?(path_prefix) }
+                               .max_by { |path_prefix, _| path_prefix.length }
+    halt 404, "Proxy not found for path: #{request.path_info}" unless prefix && upstream
 
     method = request.request_method.downcase.to_sym
     request_headers = build_request_headers
     request_body = BODYLESS_METHODS.include?(method) ? nil : read_request_body
-    target_path = [request.path_info.delete_prefix(prefix), request.query_string].reject(&:empty?).join('?')
+    client = upstream.fetch(:connection)
+    target_path = build_target_path(prefix, upstream.fetch(:path_prefix))
     args = [method, target_path]
     args << request_body unless BODYLESS_METHODS.include?(method)
     args << request_headers
@@ -96,9 +141,17 @@ helpers do
       },
       proxy: {
         prefix: prefix,
-        upstream: client.build_url.to_s
+        upstream: upstream.fetch(:url)
       }
     }, response_body:, response_content_type: response.headers['content-type'])
+  end
+
+  def build_target_path(prefix, upstream_path_prefix)
+    request_path = request.path_info.delete_prefix(prefix)
+    request_path = '/' if request_path.empty?
+    request_path = "/#{request_path}" unless request_path.start_with?('/')
+
+    [ "#{upstream_path_prefix}#{request_path}", request.query_string ].reject(&:empty?).join('?')
   end
 
   def build_request_headers
