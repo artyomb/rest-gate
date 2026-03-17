@@ -169,8 +169,11 @@ helpers do
   end
 
   def read_request_body
-    request.body.rewind
-    request.body.read.tap { request.body.rewind }
+    body = request.body
+    return '' unless body
+
+    body.rewind if body.respond_to?(:rewind)
+    body.read.to_s.tap { body.rewind if body.respond_to?(:rewind) }
   end
 
   def binary_content_type?(content_type) = content_type.to_s.match?(BINARY_CONTENT_TYPE_PATTERN)
