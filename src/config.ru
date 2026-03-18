@@ -174,6 +174,8 @@ helpers do
 
     body.rewind if body.respond_to?(:rewind)
     body.read.to_s.tap { body.rewind if body.respond_to?(:rewind) }
+  rescue EOFError
+    halt 400, 'Request body stream ended unexpectedly'
   end
 
   def binary_content_type?(content_type) = content_type.to_s.match?(BINARY_CONTENT_TYPE_PATTERN)
