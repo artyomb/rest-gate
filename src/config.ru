@@ -155,7 +155,7 @@ helpers do
   end
 
   def build_request_headers
-    request.env.each_with_object('Accept-Encoding' => 'identity') do |(key, value), headers|
+    request.env.each_with_object('Accept-Encoding' => 'identity', 'Content-Type' => request.content_type) do |(key, value), headers|
       next unless key.start_with?('HTTP_')
       header = key.delete_prefix('HTTP_').tr('_', '-').split('-').map(&:capitalize).join('-')
       headers[header] = value unless REQUEST_HEADERS_TO_SKIP.include?(header.downcase)
