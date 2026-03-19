@@ -15,7 +15,7 @@ DEFAULT_UPSTREAM_PORT = 80
 PROXY_MAP = ENV.fetch 'PROXY_MAP', '/api:https://weather.giscloud.ru/roshydro/api' # "/prefix:host[:port]" or "/prefix:https://host[:port]/base/path"
 BASE_URL = ENV.fetch 'BASE_URL', 'http://localhost:9287'   #http://grib:9287/api    http://grib:9287/roshydro
 REQUEST_RESPONSE_LOG_DIR = ENV.fetch('REQUEST_RESPONSE_LOG_DIR', File.expand_path('log/request_responses', __dir__))
-REQUEST_RESPONSE_LOG_BODY_LIMIT = Integer(ENV.fetch('REQUEST_RESPONSE_LOG_BODY_LIMIT', '4096'), exception: false) || 4096
+REQUEST_RESPONSE_LOG_BODY_LIMIT = Integer(ENV.fetch('REQUEST_RESPONSE_LOG_BODY_LIMIT', '0'), exception: false) || 0
 REQUEST_RESPONSE_LOG_TTL_SECONDS = Integer(ENV.fetch('REQUEST_RESPONSE_LOG_TTL_SECONDS', '3600'), exception: false) || 3600
 REQUEST_RESPONSE_LOG_CLEANUP_INTERVAL_SECONDS = Integer(ENV.fetch('REQUEST_RESPONSE_LOG_CLEANUP_INTERVAL_SECONDS', '300'), exception: false) || 300
 BINARY_CONTENT_TYPE_PATTERN = /octet-stream|x-protobuf|image|video|audio|font|pdf|zip/
@@ -117,7 +117,9 @@ helpers do
     args << request_body unless BODYLESS_METHODS.include?(method)
     args << request_headers
 
+    started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
     response = client.send(*args)
+    duration_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000).round(3)
     # response_body = render_response_body(response, client, prefix)
     response_body = response.body
     status response.status
@@ -142,6 +144,9 @@ helpers do
       proxy: {
         prefix: prefix,
         upstream: upstream.fetch(:url)
+      },
+      timing: {
+        duration_ms: duration_ms
       }
     }, response_body:, response_content_type: response.headers['content-type'])
   end
