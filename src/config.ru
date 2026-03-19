@@ -184,6 +184,7 @@ helpers do
     body = body.to_s
     return if body.empty?
     return "[binary body omitted, #{body.bytesize} bytes]" if binary_content_type?(content_type)
+    return body if REQUEST_RESPONSE_LOG_BODY_LIMIT <= 0
     return body if body.bytesize <= REQUEST_RESPONSE_LOG_BODY_LIMIT
 
     "#{body.byteslice(0, REQUEST_RESPONSE_LOG_BODY_LIMIT)}...[truncated #{body.bytesize - REQUEST_RESPONSE_LOG_BODY_LIMIT} bytes]"
