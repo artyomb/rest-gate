@@ -30,6 +30,13 @@ RSpec.describe "Request and response logging", type: :request do
   end
 
   let(:client) { FakeProxyClient.new(upstream_response) }
+  let(:upstream_config) do
+    {
+      path_prefix: '',
+      url: 'https://upstream.test',
+      connection: client
+    }
+  end
   let(:log_dir) { Dir.mktmpdir("request_response_logs") }
 
   around do |example|
@@ -39,12 +46,14 @@ RSpec.describe "Request and response logging", type: :request do
     original_log_ttl = app_class.settings.request_response_log_ttl_seconds
     original_cleanup_interval = app_class.settings.request_response_log_cleanup_interval_seconds
     original_last_cleanup_at = app_class.settings.request_response_log_last_cleanup_at
+    original_retention_rules = app_class.settings.retention_rules
 
-    app_class.set :http_clients, { "/proxy" => client }
+    app_class.set :http_clients, { "/proxy" => upstream_config }
     app_class.set :request_response_log_dir, log_dir
     app_class.set :request_response_log_ttl_seconds, 3600
     app_class.set :request_response_log_cleanup_interval_seconds, 300
     app_class.set :request_response_log_last_cleanup_at, Time.at(0)
+    app_class.set :retention_rules, []
 
     example.run
   ensure
@@ -53,6 +62,7 @@ RSpec.describe "Request and response logging", type: :request do
     app_class.set :request_response_log_ttl_seconds, original_log_ttl
     app_class.set :request_response_log_cleanup_interval_seconds, original_cleanup_interval
     app_class.set :request_response_log_last_cleanup_at, original_last_cleanup_at
+    app_class.set :retention_rules, original_retention_rules
     FileUtils.remove_entry(log_dir)
   end
 
@@ -92,7 +102,9 @@ RSpec.describe "Request and response logging", type: :request do
   it "stores binary responses in a sibling file and references it from json" do
     binary_body = "\x89PNG\r\n\x1A\nbinary-image".b
     client = FakeProxyClient.new(FakeUpstreamResponse.new(200, { "content-type" => "image/png" }, binary_body))
-    Sinatra::Application.set :http_clients, { "/proxy" => client }
+    Sinatra::Application.set :http_clients, {
+      "/proxy" => upstream_config.merge(connection: client)
+    }
 
     get "/proxy/assets/logo.png"
 
@@ -133,5 +145,85 @@ RSpec.describe "Request and response logging", type: :request do
     log_files = Dir.children(log_dir)
     expect(log_files).not_to include("stale.json", "stale.png")
     expect(log_files.count { _1.end_with?(".json") }).to eq(1)
+  end
+
+  describe "RETENTION parsing" do
+    let(:rules) do
+      Retention.parse([
+        "10:{ALL}+{QUERY:.*}+{URL:.*}",
+        "20:{GET,POST}+{QUERY:.*}+{URL:/api/.*}",
+        "30:{GET}+{QUERY:.*id=123.*}+{URL:/api/get_point.*}"
+      ].join(","))
+    end
+
+    it "parses limits, method lists, and regular expressions" do
+      expect(rules.map { _1[:limit] }).to eq([10, 20, 30])
+      expect(rules[0][:methods]).to be_nil
+      expect(rules[1][:methods]).to eq(%w[GET POST])
+      expect(rules[2][:query]).to match("type=a&id=123")
+      expect(rules[2][:url]).to match("/api/get_point/1")
+    end
+
+    it "rejects invalid rules and regular expressions" do
+      expect {
+        Retention.parse("0:{ALL}+{QUERY:.*}+{URL:.*}")
+      }.to raise_error(ArgumentError, /RETENTION rule/)
+      expect {
+        Retention.parse("10:{GET}+{QUERY:.*}")
+      }.to raise_error(ArgumentError, /RETENTION rule/)
+      expect {
+        Retention.parse("10:{GET}+{QUERY:[}+{URL:.*}")
+      }.to raise_error(ArgumentError, /RETENTION regex/)
+    end
+  end
+
+  describe "RETENTION storage" do
+    let(:endpoint) { "/proxy/api/select" }
+
+    it "passes unmatched requests without storing them" do
+      Sinatra::Application.set :retention_rules, Retention.parse(
+        "2:{GET}+{QUERY:.*}+{URL:/proxy/api/select.*}"
+      )
+
+      get "/proxy/api/other?id=123"
+
+      expect(last_response.status).to eq(201)
+      expect(Dir.children(log_dir)).to be_empty
+    end
+
+    it "uses the last matching rule and keeps independent limits" do
+      Sinatra::Application.set :retention_rules, Retention.parse([
+        "1:{GET}+{QUERY:.*}+{URL:/proxy/api/select.*}",
+        "2:{GET}+{QUERY:.*id=123.*}+{URL:/proxy/api/select.*}"
+      ].join(","))
+
+      3.times { get "#{endpoint}?id=123" }
+      2.times { get "#{endpoint}?id=456" }
+
+      entries = Dir.children(log_dir)
+                   .select { _1.end_with?(".json") }
+                   .map { JSON.parse(File.read(File.join(log_dir, _1))) }
+      entries_by_query = entries.group_by { _1.dig("request", "query_string") }
+
+      expect(entries_by_query.fetch("id=123").size).to eq(2)
+      expect(entries_by_query.fetch("id=456").size).to eq(1)
+    end
+
+    it "removes a retained JSON file together with its binary body" do
+      binary_body = "\x89PNG\r\n\x1A\nbinary-image".b
+      client = FakeProxyClient.new(FakeUpstreamResponse.new(200, { "content-type" => "image/png" }, binary_body))
+      Sinatra::Application.set :http_clients, {
+        "/proxy" => upstream_config.merge(connection: client)
+      }
+      Sinatra::Application.set :retention_rules, Retention.parse(
+        "1:{GET}+{QUERY:.*}+{URL:/proxy/assets/.*}"
+      )
+
+      2.times { get "/proxy/assets/logo.png" }
+
+      files = Dir.children(log_dir)
+      expect(files.count { _1.end_with?(".json") }).to eq(1)
+      expect(files.count { _1.end_with?(".png") }).to eq(1)
+    end
   end
 end

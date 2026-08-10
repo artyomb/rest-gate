@@ -12,12 +12,13 @@ require 'uri'
 StackServiceBase.rack_setup self
 
 DEFAULT_UPSTREAM_PORT = 80
-PROXY_MAP = ENV.fetch 'PROXY_MAP', '/api:https://weather.giscloud.ru/roshydro/api' # "/prefix:host[:port]" or "/prefix:https://host[:port]/base/path"
-BASE_URL = ENV.fetch 'BASE_URL', 'http://localhost:9287'   #http://grib:9287/api    http://grib:9287/roshydro
+PROXY_MAP = ENV.fetch 'PROXY_MAP', '/api:http://example.ru/base/path/api' # "/prefix:host[:port]" or "/prefix:https://host[:port]/base/path"
 REQUEST_RESPONSE_LOG_DIR = ENV.fetch('REQUEST_RESPONSE_LOG_DIR', File.expand_path('log/request_responses', __dir__))
 REQUEST_RESPONSE_LOG_BODY_LIMIT = Integer(ENV.fetch('REQUEST_RESPONSE_LOG_BODY_LIMIT', '0'), exception: false) || 0
 REQUEST_RESPONSE_LOG_TTL_SECONDS = Integer(ENV.fetch('REQUEST_RESPONSE_LOG_TTL_SECONDS', '3600'), exception: false) || 3600
 REQUEST_RESPONSE_LOG_CLEANUP_INTERVAL_SECONDS = Integer(ENV.fetch('REQUEST_RESPONSE_LOG_CLEANUP_INTERVAL_SECONDS', '300'), exception: false) || 300
+# Comma-separated N:{METHODS}+{QUERY:regexp}+{URL:regexp} rules; later matches take precedence.
+RETENTION = ENV.fetch('RETENTION', '')
 BINARY_CONTENT_TYPE_PATTERN = /octet-stream|x-protobuf|image|video|audio|font|pdf|zip/
 BODYLESS_METHODS = %i[get head delete options].freeze
 REQUEST_HEADERS_TO_SKIP = %w[host connection proxy-connection content-length accept-encoding].freeze
@@ -69,6 +70,34 @@ def normalize_upstream_path_prefix(path)
   "/#{path}".gsub(%r{/+}, '/').sub(%r{/$}, '')
 end
 
+module Retention
+  module_function
+
+  def parse(value)
+    value = value.to_s.strip
+    return [].freeze if value.empty?
+
+    value.split(/,(?=\s*\d+:\{)/).map do |definition|
+      definition = definition.strip
+      match = definition.match(/\A(\d+):\{([^{}]+)\}\+\{QUERY:(.*)\}\+\{URL:(.*)\}\z/)
+      raise ArgumentError, "Invalid RETENTION rule: #{definition}" unless match
+
+      methods = match[2].split(',').map { _1.strip.upcase }
+      valid_methods = methods == ['ALL'] || (!methods.include?('ALL') && methods.all? { _1.match?(/\A[A-Z]+\z/) })
+      raise ArgumentError, "Invalid RETENTION rule: #{definition}" unless match[1].to_i.positive? && valid_methods
+
+      {
+        limit: match[1].to_i,
+        methods: methods == ['ALL'] ? nil : methods.freeze,
+        query: Regexp.new(match[3]),
+        url: Regexp.new(match[4])
+      }.freeze
+    rescue RegexpError => e
+      raise ArgumentError, "Invalid RETENTION regex in #{definition}: #{e.message}"
+    end.freeze
+  end
+end
+
 configure do
   proxy_map = parse_proxy_map(PROXY_MAP)
   set :http_clients, proxy_map.transform_values {
@@ -87,6 +116,7 @@ configure do
   set :request_response_log_ttl_seconds, REQUEST_RESPONSE_LOG_TTL_SECONDS
   set :request_response_log_cleanup_interval_seconds, REQUEST_RESPONSE_LOG_CLEANUP_INTERVAL_SECONDS
   set :request_response_log_last_cleanup_at, Time.at(0)
+  set :retention_rules, Retention.parse(RETENTION)
 
   FileUtils.mkdir_p settings.request_response_log_dir
 end
@@ -196,13 +226,27 @@ helpers do
   end
 
   def append_request_response_log(entry, response_body:, response_content_type:)
-    cleanup_expired_log_files_if_needed
+    retention_rule = matching_retention_rule(
+      request.request_method, request.query_string, request.path_info
+    )
+    return if settings.retention_rules.any? && !retention_rule
+
+    cleanup_expired_log_files_if_needed unless retention_rule
 
     timestamp = Time.now.utc
     basename = "#{timestamp.strftime('%Y%m%dT%H%M%S%6N')}_#{SecureRandom.uuid}"
     save_binary_response_body(basename, response_body, response_content_type, entry[:response])
     File.write(File.join(settings.request_response_log_dir, "#{basename}.json"), JSON.pretty_generate(entry.merge(timestamp: timestamp.iso8601)))
+    enforce_retention(retention_rule) if retention_rule
     nil
+  end
+
+  def matching_retention_rule(method, query, url)
+    settings.retention_rules.reverse_each.find do |rule|
+      (rule[:methods].nil? || rule[:methods].include?(method)) &&
+        rule[:query].match?(query) &&
+        rule[:url].match?(url)
+    end
   end
 
   def save_binary_response_body(basename, body, content_type, response_entry)
@@ -242,6 +286,39 @@ helpers do
       next unless File.mtime(path) < cutoff_time
 
       File.delete(path)
+    rescue Errno::ENOENT
+      next
+    end
+  end
+
+  def enforce_retention(rule)
+    files = retained_log_files(rule)
+    files.first([files.length - rule[:limit], 0].max).each { delete_log_object(_1) }
+  end
+
+  def retained_log_files(rule)
+    Dir.children(settings.request_response_log_dir).sort.filter_map do |filename|
+      next unless filename.end_with?('.json')
+
+      path = File.join(settings.request_response_log_dir, filename)
+      entry = JSON.parse(File.read(path))
+      stored_rule = matching_retention_rule(
+        entry.dig('request', 'method').to_s,
+        entry.dig('request', 'query_string').to_s,
+        entry.dig('request', 'path').to_s
+      )
+      path if stored_rule.equal?(rule)
+    rescue JSON::ParserError, Errno::ENOENT
+      nil
+    end
+  end
+
+  def delete_log_object(json_path)
+    basename = File.basename(json_path, '.json')
+    Dir.children(settings.request_response_log_dir).each do |filename|
+      next unless filename == "#{basename}.json" || filename.start_with?("#{basename}.")
+
+      File.delete(File.join(settings.request_response_log_dir, filename))
     rescue Errno::ENOENT
       next
     end
