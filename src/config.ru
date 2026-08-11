@@ -143,12 +143,8 @@ helpers do
     request_body = BODYLESS_METHODS.include?(method) ? nil : read_request_body
     client = upstream.fetch(:connection)
     target_path = build_target_path(prefix, upstream.fetch(:path_prefix))
-    args = [method, target_path]
-    args << request_body unless BODYLESS_METHODS.include?(method)
-    args << request_headers
-
     started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    response = client.send(*args)
+    response = client.run_request(method, target_path, request_body, request_headers)
     duration_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000).round(3)
     # response_body = render_response_body(response, client, prefix)
     response_body = response.body

@@ -12,7 +12,7 @@ class FakeProxyClient
     @response = response
   end
 
-  def send(*args)
+  def run_request(*args)
     @calls = args
     @response
   end
@@ -78,7 +78,11 @@ RSpec.describe "Request and response logging", type: :request do
       "/api/items?draft=true",
       '{"name":"demo"}'
     ])
-    expect(client.calls[3]).to include("X-Trace-Id" => "trace-123", "Accept-Encoding" => "identity")
+    expect(client.calls[3]).to include(
+      "X-Trace-Id" => "trace-123",
+      "Accept-Encoding" => "identity",
+      "Content-Type" => "application/json"
+    )
 
     log_files = Dir.children(log_dir)
     expect(log_files.size).to eq(1)
@@ -97,6 +101,27 @@ RSpec.describe "Request and response logging", type: :request do
     expect(entry.dig("proxy", "prefix")).to eq("/proxy")
     expect(entry.dig("proxy", "upstream")).to eq("https://upstream.test")
     expect(entry.fetch("timestamp")).to be_a(String)
+  end
+
+  it "forwards end-to-end headers on bodyless requests" do
+    header "Authorization", "Bearer access-token"
+    header "Cookie", "session=abc123"
+    header "Accept", "application/json"
+    header "X-Forwarded-For", "192.0.2.10"
+    header "X-Forwarded-Host", "rest.example.test"
+    header "X-Request-Id", "request-123"
+
+    get "/proxy/api/items?draft=true"
+
+    expect(client.calls[0..2]).to eq([:get, "/api/items?draft=true", nil])
+    expect(client.calls[3]).to include(
+      "Authorization" => "Bearer access-token",
+      "Cookie" => "session=abc123",
+      "Accept" => "application/json",
+      "X-Forwarded-For" => "192.0.2.10",
+      "X-Forwarded-Host" => "rest.example.test",
+      "X-Request-Id" => "request-123"
+    )
   end
 
   it "stores binary responses in a sibling file and references it from json" do
