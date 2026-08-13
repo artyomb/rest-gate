@@ -96,6 +96,68 @@ module Retention
       raise ArgumentError, "Invalid RETENTION regex in #{definition}: #{e.message}"
     end.freeze
   end
+
+  def match(rules, method, query, url)
+    rules.reverse_each.find do |rule|
+      (rule[:methods].nil? || rule[:methods].include?(method)) &&
+        rule[:query].match?(query) &&
+        rule[:url].match?(url)
+    end
+  end
+end
+
+class RetentionStore
+  def initialize(directory, rules = nil)
+    @directory = directory
+    @mutex = Mutex.new
+    build_index(rules) if rules&.any?
+  end
+
+  def log_objects_exceeding_limit(rule, json_path, body_file, rules)
+    @mutex.synchronize do
+      build_index(rules) unless @rules.equal?(rules)
+      objects = @objects_by_rule.fetch(rule)
+      objects.select! { File.file?(_1.first) }
+      objects << log_object(json_path, body_file) unless objects.any? { _1.first == json_path }
+      objects.sort_by!(&:first)
+      objects.shift([objects.length - rule[:limit], 0].max)
+    end
+  end
+
+  private
+
+  def build_index(rules)
+    @rules = rules
+    @objects_by_rule = rules.to_h { [_1, []] }
+
+    Dir.children(@directory).sort.each do |filename|
+      next unless filename.end_with?(".json")
+
+      path = File.join(@directory, filename)
+      entry = JSON.parse(File.read(path))
+      rule = Retention.match(
+        rules,
+        entry.dig("request", "method").to_s,
+        entry.dig("request", "query_string").to_s,
+        entry.dig("request", "path").to_s
+      )
+      next unless rule
+
+      @objects_by_rule.fetch(rule) << log_object(path, entry.dig("response", "body_file"))
+    rescue JSON::ParserError, Errno::ENOENT
+      next
+    end
+  end
+
+  def log_object(json_path, body_file)
+    return [json_path] if body_file.to_s.empty?
+
+    filename = File.basename(body_file.to_s)
+    basename = File.basename(json_path, ".json")
+    return [json_path] unless filename.start_with?("#{basename}.")
+
+    [json_path, File.join(@directory, filename)]
+  end
 end
 
 configure do
@@ -119,6 +181,7 @@ configure do
   set :retention_rules, Retention.parse(RETENTION)
 
   FileUtils.mkdir_p settings.request_response_log_dir
+  set :retention_store, RetentionStore.new(REQUEST_RESPONSE_LOG_DIR, settings.retention_rules)
 end
 
 use Rack.middleware_klass do |env, app|
@@ -152,29 +215,31 @@ helpers do
     copy_headers_from_response(response.headers)
     body response_body
 
-    append_request_response_log({
-      request: {
-        method: request.request_method,
-        path: request.path_info,
-        target_path: target_path,
-        query_string: request.query_string,
-        headers: request_headers,
-        body: body_for_log(request_body, request.content_type),
-        ip: request.ip
-      },
-      response: {
-        status: response.status,
-        headers: response.headers,
-        body: body_for_log(response_body, response.headers['content-type'])
-      },
-      proxy: {
-        prefix: prefix,
-        upstream: upstream.fetch(:url)
-      },
-      timing: {
-        duration_ms: duration_ms
-      }
-    }, response_body:, response_content_type: response.headers['content-type'])
+    otl_span("restgate.persist_request_response") do
+      append_request_response_log({
+        request: {
+          method: request.request_method,
+          path: request.path_info,
+          target_path: target_path,
+          query_string: request.query_string,
+          headers: request_headers,
+          body: body_for_log(request_body, request.content_type),
+          ip: request.ip
+        },
+        response: {
+          status: response.status,
+          headers: response.headers,
+          body: body_for_log(response_body, response.headers['content-type'])
+        },
+        proxy: {
+          prefix: prefix,
+          upstream: upstream.fetch(:url)
+        },
+        timing: {
+          duration_ms: duration_ms
+        }
+      }, response_body:, response_content_type: response.headers['content-type'])
+    end
   end
 
   def build_target_path(prefix, upstream_path_prefix)
@@ -232,17 +297,14 @@ helpers do
     timestamp = Time.now.utc
     basename = "#{timestamp.strftime('%Y%m%dT%H%M%S%6N')}_#{SecureRandom.uuid}"
     save_binary_response_body(basename, response_body, response_content_type, entry[:response])
-    File.write(File.join(settings.request_response_log_dir, "#{basename}.json"), JSON.pretty_generate(entry.merge(timestamp: timestamp.iso8601)))
-    enforce_retention(retention_rule) if retention_rule
+    json_path = File.join(settings.request_response_log_dir, "#{basename}.json")
+    File.write(json_path, JSON.pretty_generate(entry.merge(timestamp: timestamp.iso8601)))
+    enforce_retention(retention_rule, json_path, entry.dig(:response, :body_file)) if retention_rule
     nil
   end
 
   def matching_retention_rule(method, query, url)
-    settings.retention_rules.reverse_each.find do |rule|
-      (rule[:methods].nil? || rule[:methods].include?(method)) &&
-        rule[:query].match?(query) &&
-        rule[:url].match?(url)
-    end
+    Retention.match(settings.retention_rules, method, query, url)
   end
 
   def save_binary_response_body(basename, body, content_type, response_entry)
@@ -287,37 +349,18 @@ helpers do
     end
   end
 
-  def enforce_retention(rule)
-    files = retained_log_files(rule)
-    files.first([files.length - rule[:limit], 0].max).each { delete_log_object(_1) }
-  end
-
-  def retained_log_files(rule)
-    Dir.children(settings.request_response_log_dir).sort.filter_map do |filename|
-      next unless filename.end_with?('.json')
-
-      path = File.join(settings.request_response_log_dir, filename)
-      entry = JSON.parse(File.read(path))
-      stored_rule = matching_retention_rule(
-        entry.dig('request', 'method').to_s,
-        entry.dig('request', 'query_string').to_s,
-        entry.dig('request', 'path').to_s
-      )
-      path if stored_rule.equal?(rule)
-    rescue JSON::ParserError, Errno::ENOENT
-      nil
+  def enforce_retention(rule, json_path, body_file)
+    otl_span("restgate.enforce_retention") do
+      settings.retention_store
+              .log_objects_exceeding_limit(rule, json_path, body_file, settings.retention_rules)
+              .each { delete_log_object(_1) }
     end
   end
 
-  def delete_log_object(json_path)
-    basename = File.basename(json_path, '.json')
-    Dir.children(settings.request_response_log_dir).each do |filename|
-      next unless filename == "#{basename}.json" || filename.start_with?("#{basename}.")
-
-      File.delete(File.join(settings.request_response_log_dir, filename))
-    rescue Errno::ENOENT
-      next
-    end
+  def delete_log_object(paths)
+    paths.each { File.delete(_1) }
+  rescue Errno::ENOENT
+    nil
   end
 end
 

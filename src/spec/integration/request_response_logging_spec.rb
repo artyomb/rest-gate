@@ -47,6 +47,7 @@ RSpec.describe "Request and response logging", type: :request do
     original_cleanup_interval = app_class.settings.request_response_log_cleanup_interval_seconds
     original_last_cleanup_at = app_class.settings.request_response_log_last_cleanup_at
     original_retention_rules = app_class.settings.retention_rules
+    original_retention_store = app_class.settings.retention_store
 
     app_class.set :http_clients, { "/proxy" => upstream_config }
     app_class.set :request_response_log_dir, log_dir
@@ -54,6 +55,7 @@ RSpec.describe "Request and response logging", type: :request do
     app_class.set :request_response_log_cleanup_interval_seconds, 300
     app_class.set :request_response_log_last_cleanup_at, Time.at(0)
     app_class.set :retention_rules, []
+    app_class.set :retention_store, RetentionStore.new(log_dir)
 
     example.run
   ensure
@@ -63,6 +65,7 @@ RSpec.describe "Request and response logging", type: :request do
     app_class.set :request_response_log_cleanup_interval_seconds, original_cleanup_interval
     app_class.set :request_response_log_last_cleanup_at, original_last_cleanup_at
     app_class.set :retention_rules, original_retention_rules
+    app_class.set :retention_store, original_retention_store
     FileUtils.remove_entry(log_dir)
   end
 
@@ -232,6 +235,17 @@ RSpec.describe "Request and response logging", type: :request do
 
       expect(entries_by_query.fetch("id=123").size).to eq(2)
       expect(entries_by_query.fetch("id=456").size).to eq(1)
+    end
+
+    it "indexes retained files once and reuses the index" do
+      Sinatra::Application.set :retention_rules, Retention.parse(
+        "2:{GET}+{QUERY:.*}+{URL:/proxy/api/select.*}"
+      )
+      allow(JSON).to receive(:parse).and_call_original
+
+      2.times { get "#{endpoint}?id=123" }
+
+      expect(JSON).to have_received(:parse).once
     end
 
     it "removes a retained JSON file together with its binary body" do
