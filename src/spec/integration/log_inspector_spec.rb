@@ -8,6 +8,7 @@ require_relative '../support/rack_helper'
 RSpec.describe 'Stored log inspector', type: :request do
   let(:directory) { Dir.mktmpdir('restgate-log-inspector-request') }
   let(:filename) { '20260814T080000000001_record.json' }
+  let(:retention) { '100:{ALL}+{QUERY:.*}+{URL:\A/objectfinder/api/search\z}' }
   let(:entry) do
     {
       request: {
@@ -26,6 +27,7 @@ RSpec.describe 'Stored log inspector', type: :request do
       },
       proxy: { prefix: '/objectfinder', upstream: 'http://objectfinder:8080' },
       timing: { duration_ms: 12.5 },
+      retention: { definition: retention, limit: 100 },
       timestamp: '2026-08-14T08:00:00Z'
     }
   end
@@ -50,6 +52,20 @@ RSpec.describe 'Stored log inspector', type: :request do
     expect(last_response.headers.fetch('Content-Security-Policy')).to include("default-src 'self'")
   end
 
+  it 'combines retention filtering with current filters and renders path statistics' do
+    get '/_restgate', retention:, method: 'POST', query: 'present'
+
+    expect(last_response.status).to eq(200)
+    expect(last_response.body).to include('Retention rule', retention, 'Request paths')
+    expect(last_response.body).to include('1 record', 'data-count="1"')
+    expect(last_response.body).to match(%r{<kbd>\s*/\s*</kbd>})
+    expect(last_response.body).to include('/objectfinder/api/search', '0 no query / 1 with query')
+    expect(last_response.body.index('id="retention-filter"')).to be < last_response.body.index('id="log-search"')
+
+    get '/_restgate', retention: 'another-rule', method: 'POST', query: 'present'
+    expect(last_response.body).to include('No request paths exist in the selected subset')
+  end
+
   it 'renders details with sensitive headers redacted by default' do
     get "/_restgate/logs/#{filename}"
 
@@ -57,6 +73,7 @@ RSpec.describe 'Stored log inspector', type: :request do
     expect(last_response.body).to include('[redacted]')
     expect(last_response.body).not_to include('secret-token', 'secret-cookie')
     expect(last_response.body).to include('&quot;result&quot;: true')
+    expect(last_response.body).to include('Retention rule', retention)
   end
 
   it 'reveals sensitive headers only after an explicit request' do

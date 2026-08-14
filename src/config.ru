@@ -25,6 +25,45 @@ BODYLESS_METHODS = %i[get head delete options].freeze
 REQUEST_HEADERS_TO_SKIP = %w[host connection proxy-connection content-length accept-encoding].freeze
 RESPONSE_HEADERS_TO_SKIP = %w[connection proxy-connection transfer-encoding content-length].freeze
 
+module Retention
+  module_function
+
+  def parse(value)
+    value = value.to_s.strip
+    return [].freeze if value.empty?
+
+    value.split(/,(?=\s*\d+:\{)/).map do |definition|
+      definition = definition.strip
+      match = definition.match(/\A(\d+):\{([^{}]+)\}\+\{QUERY:(.*)\}\+\{URL:(.*)\}\z/)
+      raise ArgumentError, "Invalid RETENTION rule: #{definition}" unless match
+
+      methods = match[2].split(',').map { _1.strip.upcase }
+      valid_methods = methods == ['ALL'] || (!methods.include?('ALL') && methods.all? { _1.match?(/\A[A-Z]+\z/) })
+      raise ArgumentError, "Invalid RETENTION rule: #{definition}" unless match[1].to_i.positive? && valid_methods
+
+      {
+        definition:,
+        limit: match[1].to_i,
+        methods: methods == ['ALL'] ? nil : methods.freeze,
+        query: Regexp.new(match[3]),
+        url: Regexp.new(match[4])
+      }.freeze
+    rescue RegexpError => e
+      raise ArgumentError, "Invalid RETENTION regex in #{definition}: #{e.message}"
+    end.freeze
+  end
+
+  def match(rules, method, query, url)
+    rules.reverse_each.find do |rule|
+      (rule[:methods].nil? || rule[:methods].include?(method)) &&
+        rule[:query].match?(query) &&
+        rule[:url].match?(url)
+    end
+  end
+end
+
+RETENTION_RULES = Retention.parse(RETENTION)
+
 if RESTGATE_UI_ENABLED
   require_relative 'restgate_ui'
   RestGate::UI.register_middleware(self)
@@ -75,42 +114,6 @@ def normalize_upstream_path_prefix(path)
   return '' if path.empty? || path == '/'
 
   "/#{path}".gsub(%r{/+}, '/').sub(%r{/$}, '')
-end
-
-module Retention
-  module_function
-
-  def parse(value)
-    value = value.to_s.strip
-    return [].freeze if value.empty?
-
-    value.split(/,(?=\s*\d+:\{)/).map do |definition|
-      definition = definition.strip
-      match = definition.match(/\A(\d+):\{([^{}]+)\}\+\{QUERY:(.*)\}\+\{URL:(.*)\}\z/)
-      raise ArgumentError, "Invalid RETENTION rule: #{definition}" unless match
-
-      methods = match[2].split(',').map { _1.strip.upcase }
-      valid_methods = methods == ['ALL'] || (!methods.include?('ALL') && methods.all? { _1.match?(/\A[A-Z]+\z/) })
-      raise ArgumentError, "Invalid RETENTION rule: #{definition}" unless match[1].to_i.positive? && valid_methods
-
-      {
-        limit: match[1].to_i,
-        methods: methods == ['ALL'] ? nil : methods.freeze,
-        query: Regexp.new(match[3]),
-        url: Regexp.new(match[4])
-      }.freeze
-    rescue RegexpError => e
-      raise ArgumentError, "Invalid RETENTION regex in #{definition}: #{e.message}"
-    end.freeze
-  end
-
-  def match(rules, method, query, url)
-    rules.reverse_each.find do |rule|
-      (rule[:methods].nil? || rule[:methods].include?(method)) &&
-        rule[:query].match?(query) &&
-        rule[:url].match?(url)
-    end
-  end
 end
 
 class RetentionStore
@@ -185,7 +188,7 @@ configure do
   set :request_response_log_ttl_seconds, REQUEST_RESPONSE_LOG_TTL_SECONDS
   set :request_response_log_cleanup_interval_seconds, REQUEST_RESPONSE_LOG_CLEANUP_INTERVAL_SECONDS
   set :request_response_log_last_cleanup_at, Time.at(0)
-  set :retention_rules, Retention.parse(RETENTION)
+  set :retention_rules, RETENTION_RULES
 
   FileUtils.mkdir_p settings.request_response_log_dir
   set :retention_store, RetentionStore.new(REQUEST_RESPONSE_LOG_DIR, settings.retention_rules)
@@ -309,6 +312,10 @@ helpers do
 
     timestamp = Time.now.utc
     basename = "#{timestamp.strftime('%Y%m%dT%H%M%S%6N')}_#{SecureRandom.uuid}"
+    entry[:retention] = {
+      definition: retention_rule[:definition],
+      limit: retention_rule[:limit]
+    } if retention_rule
     save_binary_response_body(basename, response_body, response_content_type, entry[:response])
     json_path = File.join(settings.request_response_log_dir, "#{basename}.json")
     File.write(json_path, JSON.pretty_generate(entry.merge(timestamp: timestamp.iso8601)))

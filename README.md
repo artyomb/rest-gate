@@ -207,6 +207,7 @@ Count-based mode is active when `RETENTION` contains one or more rules.
 - Every rule has an independent object limit.
 - When a rule exceeds its limit, its oldest stored object is removed.
 - A JSON record and its binary response sidecar count as one stored object and are removed together.
+- Every new JSON record stores the exact winning retention rule and its count limit for later inspection.
 - Time-based cleanup is not used for matched records in this mode.
 
 ### `RETENTION` syntax
@@ -252,16 +253,19 @@ Open `http://<rest-gate-host>:<port>/_restgate` to inspect the files in `REQUEST
 
 The list page provides:
 
-- free-text search across method, path, raw query, status, upstream, proxy prefix, content type, and filename;
-- method, proxy-prefix, status-family, and query-presence filters;
+- free-text search across method, path, raw query, status, upstream, proxy prefix, retention rule, content type, and filename;
+- method, proxy-prefix, status-family, query-presence, and exact retention-rule filters, with the current stored size shown for every retention bucket;
+- per-path statistics for the complete filtered subset, including total, no-query, and with-query counts;
 - newest, oldest, slowest, and highest-status sorting;
 - selectable pagination, a manual refresh action, and optional 15-second auto-refresh;
 - total record, storage-size, and error summaries;
 - a usable responsive view for both desktop and smaller screens.
 
-Search terms are case-insensitive and combined with AND semantics. For example, `POST SectionCode=E aeromap` only shows records whose indexed metadata contains all three terms. The inspector caches parsed summaries and refreshes only added, changed, or removed files. Proxy requests do not scan the log directory merely because the UI is enabled.
+All filters use AND semantics and path statistics are calculated before pagination, so the statistics and record list always describe the same selected subset. Search terms are case-insensitive and are also combined with AND semantics. For example, `POST SectionCode=E aeromap` only shows records whose indexed metadata contains all three terms. The inspector caches parsed summaries and refreshes only added, changed, or removed files. Proxy requests do not scan the log directory merely because the UI is enabled.
 
-Opening a record shows the incoming and upstream paths, decoded query parameters, headers, request and response bodies, status, duration, and proxy metadata. JSON bodies are formatted for reading. Large text bodies are previewed according to `RESTGATE_UI_BODY_PREVIEW_BYTES`; the original stored JSON remains available as a download. Binary response sidecars can be opened from the same detail page.
+Records written by this version retain their original winning rule even if `RETENTION` later changes. For older JSON files without retention metadata, the inspector attributes a rule using the current `RETENTION` configuration when one matches.
+
+Opening a record shows the incoming and upstream paths, decoded query parameters, headers, request and response bodies, status, duration, proxy metadata, and attributed retention rule. JSON bodies are formatted for reading. Large text bodies are previewed according to `RESTGATE_UI_BODY_PREVIEW_BYTES`; the original stored JSON remains available as a download. Binary response sidecars can be opened from the same detail page.
 
 Sensitive request and response headers are hidden by default in rendered pages. The user may explicitly reveal them. Raw JSON downloads are exact stored files and are therefore never redacted.
 

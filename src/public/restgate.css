@@ -428,7 +428,7 @@ dt {
 
 .filters {
   display: grid;
-  grid-template-columns: minmax(260px, 2fr) repeat(5, minmax(120px, 1fr)) 80px auto;
+  grid-template-columns: repeat(2, minmax(260px, 2fr)) repeat(5, minmax(120px, 1fr)) 80px auto;
   gap: var(--space-3);
   align-items: end;
   padding: var(--space-3);
@@ -449,6 +449,72 @@ dt {
   text-transform: uppercase;
 }
 
+.filter-label-row,
+.shortcut-hint {
+  display: flex;
+  align-items: center;
+}
+
+.filter-label-row {
+  min-height: 16px;
+  justify-content: space-between;
+  gap: var(--space-1);
+}
+
+.shortcut-hint {
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.shortcut-hint kbd {
+  min-width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-1);
+  background: var(--panel-soft);
+  color: var(--text);
+  font: 600 10px/1 "SFMono-Regular", Consolas, monospace;
+}
+
+.retention-field {
+  position: relative;
+  isolation: isolate;
+}
+
+.retention-field::before {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-2) * -1);
+  z-index: 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line));
+  border-radius: var(--radius-2);
+  background: color-mix(in srgb, var(--accent-soft) 38%, var(--panel));
+  pointer-events: none;
+}
+
+.retention-field > * {
+  position: relative;
+  z-index: 1;
+}
+
+.retention-field select {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line-strong));
+}
+
+.retention-count {
+  color: var(--accent);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .field-help,
 .muted,
 .filename,
@@ -461,6 +527,34 @@ dt {
 .filter-actions {
   display: flex;
   gap: var(--space-2);
+}
+
+.path-statistics-wrap {
+  max-height: 320px;
+  overflow: auto;
+}
+
+.path-statistics-table {
+  table-layout: fixed;
+}
+
+.path-statistics-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.path-statistics-table th:last-child {
+  width: 300px;
+}
+
+.path-statistic-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.path-statistic-count span {
+  color: var(--muted);
+  font-weight: 400;
 }
 
 .table-wrap {
@@ -840,9 +934,14 @@ details.inspection > summary:hover {
   border: 0;
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1480px) {
   .filters {
-    grid-template-columns: minmax(260px, 2fr) repeat(3, minmax(120px, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .retention-field,
+  .search-field {
+    grid-column: span 2;
   }
 
   .filter-actions {
@@ -884,6 +983,7 @@ details.inspection > summary:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .retention-field,
   .search-field {
     grid-column: 1 / -1;
   }
@@ -957,6 +1057,14 @@ details.inspection > summary:hover {
   .filter-actions .button,
   .filter-actions button {
     flex: 1;
+  }
+
+  .path-statistics-table th:last-child {
+    width: 180px;
+  }
+
+  .path-statistic-count {
+    white-space: normal;
   }
 
   .section-header {

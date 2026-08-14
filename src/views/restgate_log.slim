@@ -193,6 +193,9 @@ section.section.raw-section aria-labelledby='metadata-heading'
       dt Timestamp
       dd = restgate_timestamp(record.timestamp)
     div
+      dt Retention rule
+      dd.path-value title=record.retention = record.retention || 'Time-based or not attributed'
+    div
       dt Binary attachment
       dd = record.body_file || 'None'
   details.inspection

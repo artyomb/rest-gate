@@ -8,7 +8,7 @@ module RestGate
     USERNAME = ENV.fetch('RESTGATE_UI_USERNAME', '')
     PASSWORD = ENV.fetch('RESTGATE_UI_PASSWORD', '')
     BODY_PREVIEW_BYTES = Integer(ENV.fetch('RESTGATE_UI_BODY_PREVIEW_BYTES', '200000'), exception: false) || 200_000
-    FILTER_KEYS = %w[q method prefix status query sort per_page page].freeze
+    FILTER_KEYS = %w[q method prefix status query retention sort per_page page].freeze
     SENSITIVE_HEADERS = /\A(?:authorization|cookie|set-cookie|proxy-authorization|x-api-key|api-key)\z/i
     ASSETS = {
       'restgate.css' => ['text/css', File.expand_path('public/restgate.css', __dir__)],
@@ -42,7 +42,11 @@ module RestGate
 end
 
 configure do
-  set :log_inspector, RestGate::LogInspector.new(REQUEST_RESPONSE_LOG_DIR)
+  set :log_inspector, RestGate::LogInspector.new(
+    REQUEST_RESPONSE_LOG_DIR,
+    retention_rules: RETENTION_RULES,
+    retention_matcher: Retention.method(:match)
+  )
 end
 
 before '/_restgate*' do
@@ -211,6 +215,11 @@ helpers do
 
   def restgate_duration(value)
     value.nil? ? '—' : format('%.1f ms', value)
+  end
+
+  def restgate_record_count(value)
+    count = value.to_i
+    "#{count} #{count == 1 ? 'record' : 'records'}"
   end
 
   def restgate_status_tone(status)

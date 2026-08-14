@@ -10,7 +10,7 @@ RSpec.describe RestGate::LogInspector do
 
   after { FileUtils.remove_entry(directory) }
 
-  def write_record(filename, path:, query: '', status: 200, duration: 10.0, body_file: nil)
+  def write_record(filename, path:, query: '', status: 200, duration: 10.0, body_file: nil, retention: nil)
     entry = {
       request: { method: 'GET', path:, query_string: query, headers: {}, body: nil },
       response: {
@@ -23,6 +23,7 @@ RSpec.describe RestGate::LogInspector do
       timing: { duration_ms: duration },
       timestamp: '2026-08-14T08:00:00Z'
     }
+    entry[:retention] = { definition: retention } if retention
     File.write(File.join(directory, filename), JSON.generate(entry))
   end
 
@@ -50,6 +51,48 @@ RSpec.describe RestGate::LogInspector do
 
     expect(result.records.first).to be_invalid
     expect(result.errors).to eq(1)
+  end
+
+  it 'combines retention filtering with path and query-presence statistics' do
+    retention = '10:{ALL}+{QUERY:.*}+{URL:\A/objectfinder/api/items\z}'
+    other_retention = '30:{GET}+{QUERY:id=.*}+{URL:.*}'
+    write_record('20260814T080000000001_first.json', path: '/objectfinder/api/items', retention:)
+    write_record(
+      '20260814T080000000002_second.json',
+      path: '/objectfinder/api/items',
+      query: 'id=1',
+      retention:
+    )
+    write_record(
+      '20260814T080000000003_other.json',
+      path: '/objectfinder/api/other',
+      query: 'id=2',
+      retention: other_retention
+    )
+
+    result = inspector.search('retention' => retention)
+
+    expect(result.matched).to eq(2)
+    expect(result.retentions).to contain_exactly(retention, other_retention)
+    expect(result.retention_counts).to eq(retention => 2, other_retention => 1)
+    expect(result.path_stats.map(&:to_h)).to eq([
+      { path: '/objectfinder/api/items', total: 2, without_query: 1, with_query: 1 }
+    ])
+  end
+
+  it 'attributes legacy records with the current retention matcher' do
+    retention = '10:{ALL}+{QUERY:.*}+{URL:\A/objectfinder/api/items\z}'
+    rules = [{ definition: retention }]
+    matcher = ->(configured_rules, _method, _query, path) {
+      configured_rules.first if path == '/objectfinder/api/items'
+    }
+    legacy_inspector = described_class.new(directory, retention_rules: rules, retention_matcher: matcher)
+    write_record('20260814T080000000001_legacy.json', path: '/objectfinder/api/items')
+
+    result = legacy_inspector.search('retention' => retention)
+
+    expect(result.matched).to eq(1)
+    expect(result.records.first.retention).to eq(retention)
   end
 
   it 'allows only the binary attachment referenced by the selected JSON record' do

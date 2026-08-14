@@ -80,6 +80,27 @@
     }, AUTO_REFRESH_INTERVAL);
   }
 
+  function initializeRetentionCount() {
+    var select = document.querySelector("[data-retention-filter]");
+    var count = document.querySelector("[data-retention-count]");
+    if (!select || !count) return;
+
+    var update = function () {
+      if (!select.value) {
+        count.hidden = true;
+        return;
+      }
+
+      var option = select.options[select.selectedIndex];
+      var records = Number(option.dataset.count || "0");
+      count.textContent = records + (records === 1 ? " record" : " records");
+      count.hidden = false;
+    };
+
+    select.addEventListener("change", update);
+    update();
+  }
+
   document.addEventListener("click", function (event) {
     var button = event.target.closest("[data-copy-target]");
     if (button) copyText(button);
@@ -98,5 +119,6 @@
   document.addEventListener("DOMContentLoaded", function () {
     formatRelativeTimes();
     initializeAutoRefresh();
+    initializeRetentionCount();
   });
 })();

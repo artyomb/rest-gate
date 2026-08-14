@@ -30,12 +30,27 @@ section.section aria-labelledby='filters-heading'
   .section-header
     div
       h2#filters-heading Search and filters
-      p Search covers method, path, query, status, upstream, prefix, content type, and filename.
+      p Search covers method, path, query, status, upstream, prefix, retention rule, content type, and filename.
   form.filters action='/_restgate' method='get' data-filter-form=true
+    - unless @result.retentions.empty?
+      - selected_retention = @filters['retention']
+      - selected_count = @result.retention_counts.fetch(selected_retention, 0)
+      .filter-field.retention-field
+        .filter-label-row
+          label for='retention-filter' Retention rule
+          span.retention-count data-retention-count=true hidden=selected_retention.empty? = restgate_record_count(selected_count)
+        select#retention-filter name='retention' data-retention-filter=true
+          option value='' Any retention rule
+          - @result.retentions.each_with_index do |retention, index|
+            - count = @result.retention_counts.fetch(retention, 0)
+            option value=retention title=retention data-count=count selected=(selected_retention == retention) Rule #{index + 1} · #{restgate_record_count(count)} · #{retention}
     .search-field
-      label for='log-search' Search
+      .filter-label-row
+        label for='log-search' Search
+        span.shortcut-hint title='Press / to focus search'
+          kbd = '/'
+          span focus
       input#log-search type='search' name='q' value=@filters['q'] placeholder='Path, query, upstream, filename…' autocomplete='off' data-search=true
-      span.field-help Press / to focus
     .filter-field
       label for='method-filter' Method
       select#method-filter name='method'
@@ -79,6 +94,33 @@ section.section aria-labelledby='filters-heading'
     .filter-actions
       button.primary type='submit' Apply
       a.button.subtle href='/_restgate' Clear
+
+section.section aria-labelledby='path-statistics-heading'
+  .section-header
+    div
+      h2#path-statistics-heading Request paths
+      p Counts use the complete filtered subset before pagination.
+    span.count-badge = @result.path_stats.length
+
+  - if @result.path_stats.empty?
+    .empty-state
+      strong No request paths exist in the selected subset.
+      p Clear some filters or wait for matching traffic to arrive.
+  - else
+    .table-wrap.path-statistics-wrap
+      table.data-table.path-statistics-table
+        thead
+          tr
+            th Request path
+            th.numeric Requests
+        tbody
+          - @result.path_stats.each do |stat|
+            tr
+              td.path-statistic-path
+                code title=stat.path = stat.path
+              td.numeric.path-statistic-count
+                strong = stat.total
+                span = " (#{stat.without_query} no query / #{stat.with_query} with query)"
 
 section.section aria-labelledby='records-heading'
   .section-header

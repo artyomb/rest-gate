@@ -186,6 +186,11 @@ RSpec.describe "Request and response logging", type: :request do
 
     it "parses limits, method lists, and regular expressions" do
       expect(rules.map { _1[:limit] }).to eq([10, 20, 30])
+      expect(rules.map { _1[:definition] }).to eq([
+        "10:{ALL}+{QUERY:.*}+{URL:.*}",
+        "20:{GET,POST}+{QUERY:.*}+{URL:/api/.*}",
+        "30:{GET}+{QUERY:.*id=123.*}+{URL:/api/get_point.*}"
+      ])
       expect(rules[0][:methods]).to be_nil
       expect(rules[1][:methods]).to eq(%w[GET POST])
       expect(rules[2][:query]).to match("type=a&id=123")
@@ -220,10 +225,9 @@ RSpec.describe "Request and response logging", type: :request do
     end
 
     it "uses the last matching rule and keeps independent limits" do
-      Sinatra::Application.set :retention_rules, Retention.parse([
-        "1:{GET}+{QUERY:.*}+{URL:/proxy/api/select.*}",
-        "2:{GET}+{QUERY:.*id=123.*}+{URL:/proxy/api/select.*}"
-      ].join(","))
+      default_rule = "1:{GET}+{QUERY:.*}+{URL:/proxy/api/select.*}"
+      specific_rule = "2:{GET}+{QUERY:.*id=123.*}+{URL:/proxy/api/select.*}"
+      Sinatra::Application.set :retention_rules, Retention.parse([default_rule, specific_rule].join(","))
 
       3.times { get "#{endpoint}?id=123" }
       2.times { get "#{endpoint}?id=456" }
@@ -235,6 +239,8 @@ RSpec.describe "Request and response logging", type: :request do
 
       expect(entries_by_query.fetch("id=123").size).to eq(2)
       expect(entries_by_query.fetch("id=456").size).to eq(1)
+      expect(entries_by_query.fetch("id=123").map { _1.dig("retention", "definition") }.uniq).to eq([specific_rule])
+      expect(entries_by_query.fetch("id=456").map { _1.dig("retention", "definition") }.uniq).to eq([default_rule])
     end
 
     it "indexes retained files once and reuses the index" do

@@ -19,6 +19,7 @@ module RestGate
       :duration_ms,
       :upstream,
       :prefix,
+      :retention,
       :content_type,
       :body_file,
       :bytes,
@@ -34,9 +35,11 @@ module RestGate
       end
 
       def search_text
-        [method, display_path, status, upstream, prefix, content_type, filename].compact.join(' ').downcase
+        [method, display_path, status, upstream, prefix, retention, content_type, filename].compact.join(' ').downcase
       end
     end
+
+    PathStat = Struct.new(:path, :total, :without_query, :with_query, keyword_init: true)
 
     Result = Struct.new(
       :records,
@@ -47,6 +50,9 @@ module RestGate
       :latest_at,
       :methods,
       :prefixes,
+      :retentions,
+      :retention_counts,
+      :path_stats,
       :page,
       :pages,
       :per_page,
@@ -58,8 +64,10 @@ module RestGate
     class NotFound < StandardError; end
     class Unreadable < StandardError; end
 
-    def initialize(directory)
+    def initialize(directory, retention_rules: [], retention_matcher: nil)
       @directory = File.expand_path(directory)
+      @retention_rules = retention_rules
+      @retention_matcher = retention_matcher
       @mutex = Mutex.new
       @cache = {}
     end
@@ -81,6 +89,9 @@ module RestGate
         latest_at: records.filter_map(&:timestamp).max,
         methods: records.filter_map(&:method).uniq.sort,
         prefixes: records.filter_map(&:prefix).reject(&:empty?).uniq.sort,
+        retentions: available_retentions(records),
+        retention_counts: records.filter_map(&:retention).tally,
+        path_stats: path_statistics(filtered),
         page:,
         pages:,
         per_page:
@@ -150,17 +161,21 @@ module RestGate
     end
 
     def record_from(entry, filename, stat)
+      method = entry.dig('request', 'method').to_s.upcase
+      path = entry.dig('request', 'path').to_s
+      query = entry.dig('request', 'query_string').to_s
       body_file = entry.dig('response', 'body_file').to_s
       Record.new(
         filename:,
         timestamp: parse_timestamp(entry['timestamp']) || timestamp_from_filename(filename) || stat.mtime,
-        method: entry.dig('request', 'method').to_s.upcase,
-        path: entry.dig('request', 'path').to_s,
-        query: entry.dig('request', 'query_string').to_s,
+        method:,
+        path:,
+        query:,
         status: integer_or_nil(entry.dig('response', 'status')),
         duration_ms: float_or_nil(entry.dig('timing', 'duration_ms')),
         upstream: entry.dig('proxy', 'upstream').to_s,
         prefix: entry.dig('proxy', 'prefix').to_s,
+        retention: retention_definition(entry, method, query, path),
         content_type: entry.dig('response', 'headers', 'content-type').to_s,
         body_file: body_file.empty? ? nil : body_file,
         bytes: stat.size + attachment_size(body_file),
@@ -174,14 +189,45 @@ module RestGate
       prefix = filters['prefix'].to_s
       status = filters['status'].to_s
       query = filters['query'].to_s
+      retention = filters['retention'].to_s
 
       records.select do |record|
         terms.all? { record.search_text.include?(_1) } &&
           (method.empty? || record.method == method) &&
           (prefix.empty? || record.prefix == prefix) &&
           status_matches?(record, status) &&
-          query_matches?(record, query)
+          query_matches?(record, query) &&
+          (retention.empty? || record.retention == retention)
       end
+    end
+
+    def retention_definition(entry, method, query, path)
+      stored = entry.dig('retention', 'definition').to_s
+      return stored unless stored.empty?
+      return unless @retention_matcher
+
+      @retention_matcher.call(@retention_rules, method, query, path)&.fetch(:definition)
+    end
+
+    def available_retentions(records)
+      configured = @retention_rules.map { _1[:definition].to_s }.reject(&:empty?)
+      stored = records.filter_map(&:retention).uniq
+      configured + (stored - configured).sort
+    end
+
+    def path_statistics(records)
+      counts = Hash.new { |hash, path| hash[path] = { total: 0, without_query: 0, with_query: 0 } }
+      records.each do |record|
+        next if record.path.to_s.empty?
+
+        count = counts[record.path]
+        count[:total] += 1
+        count[record.query.to_s.empty? ? :without_query : :with_query] += 1
+      end
+
+      counts.map do |path, count|
+        PathStat.new(path:, **count)
+      end.sort_by { [-_1.total, _1.path] }
     end
 
     def status_matches?(record, filter)
