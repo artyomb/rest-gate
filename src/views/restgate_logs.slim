@@ -1,0 +1,189 @@
+.page-header
+  .page-heading
+    h1 Stored request/response logs
+    p Browse captured traffic without changing or replaying it.
+  .page-actions
+    label.auto-refresh
+      input type='checkbox' data-auto-refresh=true
+      span Auto-refresh
+    a.button.subtle href=restgate_list_url Refresh
+
+.status-strip aria-label='Log storage summary'
+  .status-item
+    span.status-label Stored
+    strong.status-value = @result.total
+    span.status-note = restgate_bytes(@result.bytes)
+  .status-item
+    span.status-label Matching
+    strong.status-value = @result.matched
+    span.status-note Current filters
+  .status-item class=(@result.errors.positive? ? 'status-risk' : nil)
+    span.status-label Errors
+    strong.status-value = @result.errors
+    span.status-note HTTP 4xx/5xx or invalid
+  .status-item class=(restgate_ui_protected? ? nil : 'status-warning')
+    span.status-label Access
+    strong.status-value = restgate_ui_protected? ? 'Protected' : 'Unprotected'
+    span.status-note = restgate_ui_protected? ? 'HTTP Basic authentication' : 'Configure UI credentials'
+
+section.section aria-labelledby='filters-heading'
+  .section-header
+    div
+      h2#filters-heading Search and filters
+      p Search covers method, path, query, status, upstream, prefix, content type, and filename.
+  form.filters action='/_restgate' method='get' data-filter-form=true
+    .search-field
+      label for='log-search' Search
+      input#log-search type='search' name='q' value=@filters['q'] placeholder='Path, query, upstream, filename…' autocomplete='off' data-search=true
+      span.field-help Press / to focus
+    .filter-field
+      label for='method-filter' Method
+      select#method-filter name='method'
+        option value='' Any method
+        - @result.methods.each do |method|
+          option value=method selected=(@filters['method'] == method) = method
+    .filter-field
+      label for='prefix-filter' Proxy prefix
+      select#prefix-filter name='prefix'
+        option value='' Any prefix
+        - @result.prefixes.each do |prefix|
+          option value=prefix selected=(@filters['prefix'] == prefix) = prefix
+    .filter-field
+      label for='status-filter' Status
+      select#status-filter name='status'
+        option value='' Any status
+        option value='2xx' selected=(@filters['status'] == '2xx') 2xx success
+        option value='3xx' selected=(@filters['status'] == '3xx') 3xx redirect
+        option value='4xx' selected=(@filters['status'] == '4xx') 4xx client error
+        option value='5xx' selected=(@filters['status'] == '5xx') 5xx server error
+        option value='errors' selected=(@filters['status'] == 'errors') All errors
+        option value='invalid' selected=(@filters['status'] == 'invalid') Invalid JSON
+    .filter-field
+      label for='query-filter' Query string
+      select#query-filter name='query'
+        option value='' Any query
+        option value='present' selected=(@filters['query'] == 'present') Present
+        option value='empty' selected=(@filters['query'] == 'empty') Empty
+    .filter-field
+      label for='sort-filter' Sort
+      select#sort-filter name='sort'
+        option value='' selected=@filters['sort'].empty? Newest first
+        option value='oldest' selected=(@filters['sort'] == 'oldest') Oldest first
+        option value='duration_desc' selected=(@filters['sort'] == 'duration_desc') Slowest first
+        option value='status_desc' selected=(@filters['sort'] == 'status_desc') Highest status first
+    .filter-field.filter-size
+      label for='page-size' Rows
+      select#page-size name='per_page'
+        - RestGate::LogInspector::PAGE_SIZES.each do |size|
+          option value=size selected=(@result.per_page == size) = size
+    .filter-actions
+      button.primary type='submit' Apply
+      a.button.subtle href='/_restgate' Clear
+
+section.section aria-labelledby='records-heading'
+  .section-header
+    div
+      h2#records-heading Records
+      p
+        - if @result.matched.zero?
+          | No matching records
+        - else
+          - first = ((@result.page - 1) * @result.per_page) + 1
+          - last = [@result.page * @result.per_page, @result.matched].min
+          | Showing #{first}–#{last} of #{@result.matched}
+    span.count-badge = @result.matched
+
+  - if @result.records.empty?
+    .empty-state
+      strong No stored logs match these filters.
+      p Clear some filters or wait for matching traffic to arrive.
+      a.button.subtle href='/_restgate' Clear filters
+  - else
+    .table-wrap.desktop-table
+      table.records-table
+        thead
+          tr
+            th Time
+            th Method
+            th Request path
+            th Status
+            th.numeric Duration
+            th Upstream
+            th.numeric Size
+            th.actions-column
+              span.sr-only Actions
+        tbody
+          - @result.records.each do |record|
+            tr class=(record.invalid? ? 'invalid-row' : nil)
+              td.time-cell
+                time datetime=record.timestamp&.iso8601 data-relative-time=true = restgate_timestamp(record.timestamp)
+                span.filename title=record.filename = record.filename
+              td
+                - if record.invalid?
+                  span.badge.badge-danger Invalid JSON
+                - else
+                  span.badge.badge-neutral = record.method
+              td.path-cell
+                strong title=record.display_path = record.path.empty? ? 'Unknown path' : record.path
+                - unless record.query.empty?
+                  span.query title=record.query = "?#{record.query}"
+                - if record.error
+                  span.row-error = record.error
+              td
+                - if record.status
+                  span class="badge badge-#{restgate_status_tone(record.status)}" = record.status
+                - else
+                  span.muted —
+              td.numeric = restgate_duration(record.duration_ms)
+              td.upstream-cell
+                span title=record.upstream = record.upstream.empty? ? '—' : record.upstream
+                - unless record.prefix.empty?
+                  code = record.prefix
+              td.numeric = restgate_bytes(record.bytes)
+              td.actions-column
+                - if record.invalid?
+                  a.button.compact.subtle href="/_restgate/logs/#{record.filename}/raw" Raw
+                - else
+                  a.button.compact.subtle href=restgate_record_url(record.filename) Open
+
+    .responsive-list
+      - @result.records.each do |record|
+        article.resource-card
+          .resource-card-header
+            .resource-title
+              strong = record.invalid? ? record.filename : record.display_path
+              time datetime=record.timestamp&.iso8601 data-relative-time=true = restgate_timestamp(record.timestamp)
+            - if record.invalid?
+              span.badge.badge-danger Invalid JSON
+            - else
+              span class="badge badge-#{restgate_status_tone(record.status)}" = record.status || 'Unknown'
+          .kv-grid
+            .kv
+              span.kv-label Method
+              span.kv-value = record.method.empty? ? '—' : record.method
+            .kv
+              span.kv-label Duration
+              span.kv-value = restgate_duration(record.duration_ms)
+            .kv
+              span.kv-label Prefix
+              span.kv-value = record.prefix.empty? ? '—' : record.prefix
+            .kv
+              span.kv-label Size
+              span.kv-value = restgate_bytes(record.bytes)
+          .card-actions
+            - if record.invalid?
+              a.button.compact.subtle href="/_restgate/logs/#{record.filename}/raw" Download raw
+            - else
+              a.button.compact.subtle href=restgate_record_url(record.filename) Open record
+
+    - if @result.pages > 1
+      nav.pagination aria-label='Record pages'
+        - if @result.page > 1
+          a.button.subtle href=restgate_list_url('page' => @result.page - 1) Previous
+        - else
+          span.button.disabled aria-disabled='true' Previous
+        span.page-position Page #{@result.page} of #{@result.pages}
+        - if @result.page < @result.pages
+          a.button.subtle href=restgate_list_url('page' => @result.page + 1) Next
+        - else
+          span.button.disabled aria-disabled='true' Next

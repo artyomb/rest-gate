@@ -10,6 +10,7 @@ The service is useful when an existing application must continue working normall
 - [Configuration](#configuration)
 - [Proxy mapping](#proxy-mapping)
 - [Request and response logging](#request-and-response-logging)
+- [Stored log inspector](#stored-log-inspector)
 - [Paths behind Traefik](#paths-behind-traefik-or-another-reverse-proxy)
 - [Header behavior](#header-behavior)
 - [Stored object format](#stored-object-format)
@@ -27,6 +28,7 @@ The service is useful when an existing application must continue working normall
 - Stores request/response metadata and textual bodies in JSON files.
 - Stores binary response bodies in sidecar files.
 - Supports time-based retention for all traffic or count-based retention for selected traffic.
+- Provides a read-only, searchable web interface for stored traffic at `/_restgate`.
 - Exposes `/healthcheck` through `stack-service-base`.
 
 ## Request flow
@@ -107,9 +109,13 @@ The upstream hostname must be resolvable inside the container network.
 | `REQUEST_RESPONSE_LOG_TTL_SECONDS` | `3600` | Maximum file age in time-based mode. `0` or a negative value disables expiry. |
 | `REQUEST_RESPONSE_LOG_CLEANUP_INTERVAL_SECONDS` | `300` | Minimum interval between directory scans in time-based mode. |
 | `RETENTION` | empty | Count-based retention rules. When set, it also acts as the storage allowlist. |
+| `RESTGATE_UI_ENABLED` | `true` | Enables the stored-log inspector at `/_restgate`. When disabled, its implementation and index are not loaded. |
+| `RESTGATE_UI_USERNAME` | empty | Optional HTTP Basic username for the inspector and its downloads. Configure together with the password. |
+| `RESTGATE_UI_PASSWORD` | empty | Optional HTTP Basic password for the inspector and its downloads. Configure together with the username. |
+| `RESTGATE_UI_BODY_PREVIEW_BYTES` | `200000` | Maximum request or response body bytes rendered on a detail page. `0` or a negative value means unlimited. |
 | `PORT` | `7000` in the Docker image | Listening port used by the image command. |
 
-Invalid `PROXY_MAP` entries, malformed `RETENTION` rules, and invalid retention regular expressions cause startup to fail with an explanatory error.
+Invalid `PROXY_MAP` entries, malformed `RETENTION` rules, invalid retention regular expressions, and an incomplete UI username/password pair while the UI is enabled cause startup to fail with an explanatory error.
 
 ## Proxy mapping
 
@@ -239,6 +245,49 @@ Use different limits for general traffic and requests containing both query para
 ```
 
 Regular expressions operate on the raw query string. Values may still be percent-encoded, and parameter order is significant unless the expression explicitly handles different orders, for example with lookaheads as shown above.
+
+## Stored log inspector
+
+Open `http://<rest-gate-host>:<port>/_restgate` to inspect the files in `REQUEST_RESPONSE_LOG_DIR`. The interface is read-only: it does not delete records, replay requests, or change retention state.
+
+The list page provides:
+
+- free-text search across method, path, raw query, status, upstream, proxy prefix, content type, and filename;
+- method, proxy-prefix, status-family, and query-presence filters;
+- newest, oldest, slowest, and highest-status sorting;
+- selectable pagination, a manual refresh action, and optional 15-second auto-refresh;
+- total record, storage-size, and error summaries;
+- a usable responsive view for both desktop and smaller screens.
+
+Search terms are case-insensitive and combined with AND semantics. For example, `POST SectionCode=E aeromap` only shows records whose indexed metadata contains all three terms. The inspector caches parsed summaries and refreshes only added, changed, or removed files. Proxy requests do not scan the log directory merely because the UI is enabled.
+
+Opening a record shows the incoming and upstream paths, decoded query parameters, headers, request and response bodies, status, duration, and proxy metadata. JSON bodies are formatted for reading. Large text bodies are previewed according to `RESTGATE_UI_BODY_PREVIEW_BYTES`; the original stored JSON remains available as a download. Binary response sidecars can be opened from the same detail page.
+
+Sensitive request and response headers are hidden by default in rendered pages. The user may explicitly reveal them. Raw JSON downloads are exact stored files and are therefore never redacted.
+
+### Protecting access
+
+Configure both credentials to enable HTTP Basic authentication for every inspector page, asset, raw download, and binary body:
+
+```yaml
+environment:
+  RESTGATE_UI_ENABLED: "true"
+  RESTGATE_UI_USERNAME: "restgate"
+  RESTGATE_UI_PASSWORD: "use-a-secret-from-your-deployment-system"
+  RESTGATE_UI_BODY_PREVIEW_BYTES: "200000"
+```
+
+If only one credential is supplied, Rest Gate refuses to start instead of silently exposing an unprotected page. Disable the complete interface with `RESTGATE_UI_ENABLED=false` when it is not required. In that mode, `restgate_ui.rb` and `log_inspector.rb` are not required, no file index is created, and the reserved `/_restgate` prefix returns `404` instead of falling through to an upstream proxy.
+
+For inspector requests, the Basic `Authorization` header is withheld from the shared Stack Service Base header logger. This safeguard is limited to the reserved UI prefix and does not change header forwarding or logging for proxied application requests.
+
+The application reserves `/_restgate` and all of its subpaths before the wildcard proxy route, so inspector requests are neither forwarded upstream nor stored as captured traffic. Traefik must still route that prefix to the Rest Gate container. If the existing router only selects application API prefixes, add a dedicated higher-priority router whose rule is equivalent to:
+
+```text
+Host(`rest.example.test`) && PathPrefix(`/_restgate`)
+```
+
+No path-replacement middleware is needed for this route. If the host's existing router already sends every path to Rest Gate, no additional ingress rule is necessary.
 
 ### Escaping rules in configuration files
 
@@ -404,6 +453,14 @@ Check Ruby syntax:
 ruby -c config.ru
 ```
 
+Run the service locally in the same mode used by a normal RubyMine launch:
+
+```bash
+bundle exec rackup -o 127.0.0.1 -p 9292 config.ru
+```
+
+Rest Gate sets `NO_RT_DEBUG=true` before loading Stack Service Base. This disables that gem's automatic Chrome debug server, whose `SocketTrace` wrapper in version `0.0.104` is incompatible with the `Addrinfo` passed by the Ruby 3.3 debugger. It does not disable RubyMine's debugger: Shift+F9 still supplies and controls `ruby-debug-ide` independently.
+
 ## Repository layout
 
 ```text
@@ -413,17 +470,22 @@ ruby -c config.ru
 │   └── ruby/Dockerfile
 ├── src/
 │   ├── config.ru
+│   ├── log_inspector.rb
+│   ├── restgate_ui.rb
+│   ├── public/
 │   ├── Gemfile
-│   └── spec/
+│   ├── spec/
+│   └── views/
 └── README.md
 ```
 
-`src/config.ru` contains the proxy, retention, and persistence implementation. Request-level behavior is covered primarily by `src/spec/integration/request_response_logging_spec.rb`.
+`src/config.ru` contains the proxy, retention, and persistence implementation. It conditionally loads `src/restgate_ui.rb`, which owns all inspector configuration, middleware, routes, and rendering helpers. `src/log_inspector.rb` owns the cached file index and search behavior. Request-level behavior is covered primarily by `src/spec/integration/request_response_logging_spec.rb` and `src/spec/integration/log_inspector_spec.rb`.
 
 ## Security and operational considerations
 
 - Stored JSON includes request and response headers and may therefore contain authorization tokens, cookies, personal data, or other secrets.
-- There is no built-in header or body redaction.
+- Stored files are not redacted. The inspector hides common credential headers in rendered pages by default, but explicitly revealed views and raw downloads contain their original values.
+- Protect `/_restgate` with `RESTGATE_UI_USERNAME` and `RESTGATE_UI_PASSWORD` and with the deployment network's normal access controls before exposing it outside a trusted development environment.
 - Restrict access to the log directory and use a dedicated persistent volume when records must survive container replacement.
 - Define narrow `RETENTION` URL rules so unrelated endpoints are forwarded without being recorded.
 - Use `REQUEST_RESPONSE_LOG_BODY_LIMIT` to prevent unexpectedly large textual log files.

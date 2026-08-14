@@ -1,0 +1,23 @@
+doctype html
+html lang='en'
+  head
+    meta charset='utf-8'
+    meta content='width=device-width, initial-scale=1' name='viewport'
+    meta content='noindex, nofollow' name='robots'
+    title Rest Gate · Stored logs
+    link href='/_restgate/assets/restgate.css' rel='stylesheet'
+    script defer=true src='/_restgate/assets/theme_plugin.js'
+    script defer=true src='/_restgate/assets/restgate.js'
+  body
+    .shell
+      header.app-header
+        .header-main
+          .brand
+            a.brand-name href='/_restgate' Rest Gate
+            span.brand-description Request/response inspection
+          #local-theme-plugin.theme-plugin-mount aria-label='Theme controls'
+        nav.nav aria-label='Primary navigation'
+          a.active href='/_restgate' Stored logs
+          a href='/healthcheck' Healthcheck
+      main
+        == yield

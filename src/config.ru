@@ -1,15 +1,15 @@
+ENV['NO_RT_DEBUG'] ||= 'true'
+
+require 'stack-service-base'
 require 'sinatra'
 require 'faraday'
 require 'faraday/retry'
 require 'faraday/net_http_persistent'
-require 'stack-service-base'
 require 'json'
 require 'fileutils'
 require 'securerandom'
 require 'time'
 require 'uri'
-
-StackServiceBase.rack_setup self
 
 DEFAULT_UPSTREAM_PORT = 80
 PROXY_MAP = ENV.fetch 'PROXY_MAP', '/api:http://example.ru/base/path/api' # "/prefix:host[:port]" or "/prefix:https://host[:port]/base/path"
@@ -17,12 +17,19 @@ REQUEST_RESPONSE_LOG_DIR = ENV.fetch('REQUEST_RESPONSE_LOG_DIR', File.expand_pat
 REQUEST_RESPONSE_LOG_BODY_LIMIT = Integer(ENV.fetch('REQUEST_RESPONSE_LOG_BODY_LIMIT', '0'), exception: false) || 0
 REQUEST_RESPONSE_LOG_TTL_SECONDS = Integer(ENV.fetch('REQUEST_RESPONSE_LOG_TTL_SECONDS', '3600'), exception: false) || 3600
 REQUEST_RESPONSE_LOG_CLEANUP_INTERVAL_SECONDS = Integer(ENV.fetch('REQUEST_RESPONSE_LOG_CLEANUP_INTERVAL_SECONDS', '300'), exception: false) || 300
+RESTGATE_UI_ENABLED = ENV.fetch('RESTGATE_UI_ENABLED', 'true').downcase == 'true'
 # Comma-separated N:{METHODS}+{QUERY:regexp}+{URL:regexp} rules; later matches take precedence.
 RETENTION = ENV.fetch('RETENTION', '')
 BINARY_CONTENT_TYPE_PATTERN = /octet-stream|x-protobuf|image|video|audio|font|pdf|zip/
 BODYLESS_METHODS = %i[get head delete options].freeze
 REQUEST_HEADERS_TO_SKIP = %w[host connection proxy-connection content-length accept-encoding].freeze
 RESPONSE_HEADERS_TO_SKIP = %w[connection proxy-connection transfer-encoding content-length].freeze
+
+if RESTGATE_UI_ENABLED
+  require_relative 'restgate_ui'
+  RestGate::UI.register_middleware(self)
+end
+StackServiceBase.rack_setup self
 
 def parse_proxy_map(proxy_map)
   proxy_map.gsub(/\s+/, '').split(',').reject(&:empty?).to_h { parse_proxy_map_entry(_1) }
@@ -188,6 +195,12 @@ use Rack.middleware_klass do |env, app|
   status, headers, body = app.call(env)
   headers.delete('content-encoding')
   [status, headers, body]
+end
+
+unless RESTGATE_UI_ENABLED
+  get '/_restgate*' do
+    halt 404
+  end
 end
 
 %w[get post put delete head patch].each do |method|

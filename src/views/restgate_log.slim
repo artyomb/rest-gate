@@ -1,0 +1,207 @@
+- record = @detail.record
+- entry = @detail.entry
+.page-header
+  .page-heading
+    a.back-link href=restgate_back_url ← Back to logs
+    .detail-title
+      span.badge.badge-neutral = record.method
+      h1 = record.path.empty? ? 'Stored request' : record.path
+    - unless record.query.empty?
+      code.detail-query = "?#{record.query}"
+  .page-actions
+    - if @reveal_sensitive
+      a.button.subtle href=restgate_detail_url(record.filename, 'reveal' => '') Hide sensitive headers
+    - else
+      a.button.subtle href=restgate_detail_url(record.filename, 'reveal' => '1') Reveal sensitive headers
+    a.button.subtle href="/_restgate/logs/#{record.filename}/raw" Download raw JSON
+    - if record.body_file
+      a.button.subtle href="/_restgate/logs/#{record.filename}/body" target='_blank' rel='noopener' Open binary body
+
+.status-strip aria-label='Record summary'
+  .status-item class="status-#{restgate_status_tone(record.status)}"
+    span.status-label Response
+    strong.status-value = record.status || 'Unknown'
+    span.status-note = record.content_type.empty? ? 'No content type' : record.content_type
+  .status-item
+    span.status-label Upstream duration
+    strong.status-value = restgate_duration(record.duration_ms)
+    span.status-note Proxy timing
+  .status-item
+    span.status-label Captured
+    strong.status-value
+      time datetime=record.timestamp&.iso8601 data-relative-time=true = restgate_timestamp(record.timestamp)
+    span.status-note = record.filename
+  .status-item
+    span.status-label Stored size
+    strong.status-value = restgate_bytes(record.bytes)
+    span.status-note = record.body_file ? 'JSON and binary body' : 'JSON record'
+
+- unless @reveal_sensitive
+  .notice.notice-warning
+    strong Sensitive headers are redacted.
+    span Authorization, Cookie, Set-Cookie, proxy authorization, and API-key headers stay hidden until explicitly revealed. Raw downloads are never redacted.
+
+.exchange-grid
+  section.section.exchange-panel aria-labelledby='request-heading'
+    .section-header
+      div
+        h2#request-heading Request
+        p Incoming request and generated upstream target.
+      span.badge.badge-neutral = record.method
+
+    dl.definition-grid
+      div
+        dt Incoming path
+        dd
+          code = record.path
+      div
+        dt Target path
+        dd.copy-row
+          code#request-target = entry.dig('request', 'target_path').to_s
+          button.button.compact.subtle type='button' data-copy-target='request-target' Copy
+      div
+        dt Client IP
+        dd = entry.dig('request', 'ip').to_s.empty? ? '—' : entry.dig('request', 'ip')
+      div
+        dt Query string
+        dd = record.query.empty? ? 'Empty' : record.query
+
+    - unless @query_params.empty?
+      h3.subsection-title Query parameters
+      .table-wrap
+        table.data-table
+          thead
+            tr
+              th Name
+              th Value
+          tbody
+            - @query_params.each do |name, value|
+              tr
+                td
+                  code = name
+                td.wrap-value = value
+
+    details.inspection
+      summary
+        span Request headers
+        span.count-badge = @request_headers.length
+      .inspection-body
+        - if @request_headers.empty?
+          p.empty-inline No request headers were stored.
+        - else
+          .table-wrap
+            table.data-table.headers-table
+              tbody
+                - @request_headers.each do |name, value|
+                  tr
+                    th = name
+                    td.wrap-value class=(value == '[redacted]' ? 'redacted' : nil) = value
+
+    details.inspection open=true
+      summary
+        span Request body
+        span.muted = restgate_bytes(@request_body[:bytes])
+      .inspection-body
+        - if @request_body[:empty]
+          p.empty-inline No request body was stored.
+        - else
+          .code-toolbar
+            span = @request_body[:truncated] ? 'Preview truncated' : 'Stored body'
+            button.button.compact.subtle type='button' data-copy-target='request-body' Copy
+          pre.code-block
+            code#request-body = @request_body[:text]
+          - if @request_body[:truncated]
+            p.field-help Preview limited by RESTGATE_UI_BODY_PREVIEW_BYTES. Download the raw JSON for the complete stored value.
+
+  section.section.exchange-panel aria-labelledby='response-heading'
+    .section-header
+      div
+        h2#response-heading Response
+        p Upstream response returned to the caller.
+      span class="badge badge-#{restgate_status_tone(record.status)}" = record.status || 'Unknown'
+
+    dl.definition-grid
+      div
+        dt Upstream
+        dd.copy-row
+          code#upstream-url = record.upstream
+          button.button.compact.subtle type='button' data-copy-target='upstream-url' Copy
+      div
+        dt Proxy prefix
+        dd
+          code = record.prefix
+      div
+        dt Content type
+        dd = record.content_type.empty? ? '—' : record.content_type
+      div
+        dt Duration
+        dd = restgate_duration(record.duration_ms)
+
+    details.inspection
+      summary
+        span Response headers
+        span.count-badge = @response_headers.length
+      .inspection-body
+        - if @response_headers.empty?
+          p.empty-inline No response headers were stored.
+        - else
+          .table-wrap
+            table.data-table.headers-table
+              tbody
+                - @response_headers.each do |name, value|
+                  tr
+                    th = name
+                    td.wrap-value class=(value == '[redacted]' ? 'redacted' : nil) = value
+
+    details.inspection open=true
+      summary
+        span Response body
+        span.muted = restgate_bytes(@response_body[:bytes])
+      .inspection-body
+        - if record.body_file
+          .attachment-row
+            div
+              strong Binary response body
+              span = record.body_file
+            a.button.compact.subtle href="/_restgate/logs/#{record.filename}/body" target='_blank' rel='noopener' Open attachment
+        - elsif @response_body[:empty]
+          p.empty-inline No response body was stored.
+        - else
+          .code-toolbar
+            span = @response_body[:truncated] ? 'Preview truncated' : 'Stored body'
+            button.button.compact.subtle type='button' data-copy-target='response-body' Copy
+          pre.code-block
+            code#response-body = @response_body[:text]
+          - if @response_body[:truncated]
+            p.field-help Preview limited by RESTGATE_UI_BODY_PREVIEW_BYTES. Download the raw JSON for the complete stored value.
+
+section.section.raw-section aria-labelledby='metadata-heading'
+  .section-header
+    div
+      h2#metadata-heading Metadata and raw record
+      p Exact storage data is secondary and collapsed by default.
+  dl.definition-grid.metadata-grid
+    div
+      dt Filename
+      dd.copy-row
+        code#record-filename = record.filename
+        button.button.compact.subtle type='button' data-copy-target='record-filename' Copy
+    div
+      dt Stored file
+      dd.path-value title=@detail.path = @detail.path
+    div
+      dt Timestamp
+      dd = restgate_timestamp(record.timestamp)
+    div
+      dt Binary attachment
+      dd = record.body_file || 'None'
+  details.inspection
+    summary
+      span = @reveal_sensitive ? 'Raw JSON (sensitive headers visible)' : 'Raw JSON (sensitive headers redacted)'
+      span.muted Advanced
+    .inspection-body
+      .code-toolbar
+        span = @reveal_sensitive ? 'Visible values' : 'Safe preview'
+        button.button.compact.subtle type='button' data-copy-target='raw-json' Copy
+      pre.code-block.raw-json
+        code#raw-json = JSON.pretty_generate(@raw_entry)
