@@ -6,6 +6,21 @@ module RestGate
   class LogInspector
     DEFAULT_PAGE_SIZE = 50
     PAGE_SIZES = [25, 50, 100].freeze
+    SORT_COLUMNS = {
+      'time' => 'Time',
+      'method' => 'Method',
+      'path' => 'Request path',
+      'status' => 'Status',
+      'duration' => 'Duration',
+      'upstream' => 'Upstream',
+      'size' => 'Size'
+    }.freeze
+    SORT_DIRECTIONS = %w[asc desc].freeze
+    LEGACY_SORTS = {
+      'oldest' => %w[time asc],
+      'duration_desc' => %w[duration desc],
+      'status_desc' => %w[status desc]
+    }.freeze
     SAFE_JSON_FILENAME = /\A[0-9A-Za-z._-]+\.json\z/
     SAFE_ATTACHMENT_FILENAME = /\A[0-9A-Za-z._-]+\z/
 
@@ -53,6 +68,8 @@ module RestGate
       :retentions,
       :retention_counts,
       :path_stats,
+      :sort_column,
+      :sort_direction,
       :page,
       :pages,
       :per_page,
@@ -75,7 +92,8 @@ module RestGate
     def search(filters = {})
       records = refresh_records
       filtered = filter_records(records, filters)
-      ordered = sort_records(filtered, filters['sort'])
+      sort_column, sort_direction = sort_definition(filters['sort'])
+      ordered = sort_records(filtered, sort_column, sort_direction)
       per_page = normalize_page_size(filters['per_page'])
       pages = [(ordered.length.to_f / per_page).ceil, 1].max
       page = [[positive_integer(filters['page'], 1), 1].max, pages].min
@@ -92,6 +110,8 @@ module RestGate
         retentions: available_retentions(records),
         retention_counts: records.filter_map(&:retention).tally,
         path_stats: path_statistics(filtered),
+        sort_column:,
+        sort_direction:,
         page:,
         pages:,
         per_page:
@@ -246,17 +266,48 @@ module RestGate
       false
     end
 
-    def sort_records(records, sort)
-      case sort
-      when 'oldest'
-        records.sort_by { [timestamp_number(_1), _1.filename] }
-      when 'duration_desc'
-        records.sort_by { [-(_1.duration_ms || -1), -timestamp_number(_1)] }
-      when 'status_desc'
-        records.sort_by { [-(_1.status || -1), -timestamp_number(_1)] }
-      else
-        records.sort_by { [-timestamp_number(_1), _1.filename] }
+    def sort_definition(value)
+      legacy = LEGACY_SORTS[value.to_s]
+      return legacy if legacy
+
+      column, direction = value.to_s.split('_', 2)
+      return [column, direction] if SORT_COLUMNS.key?(column) && SORT_DIRECTIONS.include?(direction)
+
+      %w[time desc]
+    end
+
+    def sort_records(records, column, direction)
+      records.sort do |left, right|
+        comparison = compare_sort_values(sort_value(left, column), sort_value(right, column), direction)
+        comparison = compare_sort_values(timestamp_number(left), timestamp_number(right), 'desc') if comparison.zero?
+        comparison.zero? ? left.filename <=> right.filename : comparison
       end
+    end
+
+    def sort_value(record, column)
+      case column
+      when 'time' then record.timestamp&.to_f
+      when 'method' then presence(record.method)&.downcase
+      when 'path' then presence(record.display_path)&.downcase
+      when 'status' then record.status
+      when 'duration' then record.duration_ms
+      when 'upstream' then presence(record.upstream)&.downcase
+      when 'size' then record.bytes
+      end
+    end
+
+    def compare_sort_values(left, right, direction)
+      return 0 if left.nil? && right.nil?
+      return 1 if left.nil?
+      return -1 if right.nil?
+
+      comparison = left <=> right
+      direction == 'desc' ? -comparison : comparison
+    end
+
+    def presence(value)
+      text = value.to_s
+      text.empty? ? nil : text
     end
 
     def json_path(filename)

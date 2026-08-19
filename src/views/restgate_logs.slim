@@ -32,6 +32,8 @@ section.section aria-labelledby='filters-heading'
       h2#filters-heading Search and filters
       p Search covers method, path, query, status, upstream, prefix, retention rule, content type, and filename.
   form.filters action='/_restgate' method='get' data-filter-form=true
+    - unless @filters['sort'].empty?
+      input type='hidden' name='sort' value=@filters['sort']
     - unless @result.retentions.empty?
       - selected_retention = @filters['retention']
       - selected_count = @result.retention_counts.fetch(selected_retention, 0)
@@ -79,19 +81,15 @@ section.section aria-labelledby='filters-heading'
         option value='' Any query
         option value='present' selected=(@filters['query'] == 'present') Present
         option value='empty' selected=(@filters['query'] == 'empty') Empty
-    .filter-field
-      label for='sort-filter' Sort
-      select#sort-filter name='sort'
-        option value='' selected=@filters['sort'].empty? Newest first
-        option value='oldest' selected=(@filters['sort'] == 'oldest') Oldest first
-        option value='duration_desc' selected=(@filters['sort'] == 'duration_desc') Slowest first
-        option value='status_desc' selected=(@filters['sort'] == 'status_desc') Highest status first
     .filter-field.filter-size
       label for='page-size' Rows
       select#page-size name='per_page'
         - RestGate::LogInspector::PAGE_SIZES.each do |size|
           option value=size selected=(@result.per_page == size) = size
     .filter-actions
+      label.auto-apply title='Apply filter changes automatically'
+        input type='checkbox' data-auto-apply=true
+        span Auto-apply
       button.primary type='submit' Apply
       a.button.subtle href='/_restgate' Clear
 
@@ -107,6 +105,7 @@ section.section aria-labelledby='path-statistics-heading'
       strong No request paths exist in the selected subset.
       p Clear some filters or wait for matching traffic to arrive.
   - else
+    - maximum_path_requests = @result.path_stats.map(&:total).max
     .table-wrap.path-statistics-wrap
       table.data-table.path-statistics-table
         thead
@@ -117,10 +116,12 @@ section.section aria-labelledby='path-statistics-heading'
           - @result.path_stats.each do |stat|
             tr
               td.path-statistic-path
-                code title=stat.path = stat.path
-              td.numeric.path-statistic-count
-                strong = stat.total
-                span = " (#{stat.without_query} no query / #{stat.with_query} with query)"
+                a.path-statistic-link href=restgate_list_url('q' => stat.path, 'page' => '') title="Search records for #{stat.path}" data-path-filter=stat.path
+                  code = stat.path
+              td.numeric.path-statistic-count style="--path-count-share: #{restgate_path_share(stat.total, maximum_path_requests)}"
+                span.path-statistic-content
+                  strong = stat.total
+                  span = " (#{stat.without_query} no query / #{stat.with_query} with query)"
 
 section.section aria-labelledby='records-heading'
   .section-header
@@ -141,17 +142,25 @@ section.section aria-labelledby='records-heading'
       p Clear some filters or wait for matching traffic to arrive.
       a.button.subtle href='/_restgate' Clear filters
   - else
+    nav.mobile-sort-controls aria-label='Sort records'
+      span.mobile-sort-label Sort:
+      - RestGate::LogInspector::SORT_COLUMNS.each do |column, label|
+        a class=(restgate_sort_selected?(column) ? 'mobile-sort-link active' : 'mobile-sort-link') href=restgate_sort_url(column) title="Sort by #{label.downcase} #{restgate_sort_next_direction(column)}"
+          span = label
+          - if restgate_sort_selected?(column)
+            span.sort-indicator aria-hidden='true' = restgate_sort_indicator(column)
+
     .table-wrap.desktop-table
       table.records-table
         thead
           tr
-            th Time
-            th Method
-            th Request path
-            th Status
-            th.numeric Duration
-            th Upstream
-            th.numeric Size
+            - RestGate::LogInspector::SORT_COLUMNS.each do |column, label|
+              - numeric_class = %w[duration size].include?(column) ? ' numeric' : ''
+              - active_class = restgate_sort_selected?(column) ? ' sort-active' : ''
+              th class="sortable#{numeric_class}#{active_class}" aria-sort=restgate_sort_aria(column)
+                a.sort-link href=restgate_sort_url(column) data-sort-column=column title="Sort by #{label.downcase} #{restgate_sort_next_direction(column)}"
+                  span = label
+                  span.sort-indicator aria-hidden='true' = restgate_sort_indicator(column)
             th.actions-column
               span.sr-only Actions
         tbody

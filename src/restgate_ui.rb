@@ -222,6 +222,36 @@ helpers do
     "#{count} #{count == 1 ? 'record' : 'records'}"
   end
 
+  def restgate_path_share(value, maximum)
+    percentage = maximum.to_i.positive? ? (value.to_f / maximum * 100) : 0
+    format('%.2f%%', percentage)
+  end
+
+  def restgate_sort_selected?(column) = @result.sort_column == column
+
+  def restgate_sort_next_direction(column)
+    return 'asc' unless restgate_sort_selected?(column)
+
+    @result.sort_direction == 'asc' ? 'desc' : 'asc'
+  end
+
+  def restgate_sort_url(column)
+    direction = restgate_sort_next_direction(column)
+    restgate_list_url('sort' => "#{column}_#{direction}", 'page' => '')
+  end
+
+  def restgate_sort_aria(column)
+    return 'none' unless restgate_sort_selected?(column)
+
+    @result.sort_direction == 'asc' ? 'ascending' : 'descending'
+  end
+
+  def restgate_sort_indicator(column)
+    return '↕' unless restgate_sort_selected?(column)
+
+    @result.sort_direction == 'asc' ? '↑' : '↓'
+  end
+
   def restgate_status_tone(status)
     return 'invalid' unless status
     return 'success' if status < 400

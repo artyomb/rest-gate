@@ -2,7 +2,9 @@
   "use strict";
 
   var AUTO_REFRESH_KEY = "restgate.logs.autoRefresh.v1";
+  var AUTO_APPLY_KEY = "restgate.logs.autoApply.v1";
   var AUTO_REFRESH_INTERVAL = 15000;
+  var AUTO_APPLY_DELAY = 450;
 
   function copyText(button) {
     var target = document.getElementById(button.dataset.copyTarget);
@@ -101,6 +103,55 @@
     update();
   }
 
+  function initializeAutoApply() {
+    var form = document.querySelector("[data-filter-form]");
+    var input = document.querySelector("[data-auto-apply]");
+    if (!form || !input) return;
+
+    var search = form.querySelector("[data-search]");
+    var timer;
+    var submit = function () {
+      window.clearTimeout(timer);
+      if (typeof form.requestSubmit === "function") {
+        form.requestSubmit();
+      } else {
+        form.submit();
+      }
+    };
+
+    try {
+      input.checked = window.localStorage.getItem(AUTO_APPLY_KEY) === "true";
+    } catch (_error) {
+      input.checked = false;
+    }
+
+    input.addEventListener("change", function () {
+      try {
+        window.localStorage.setItem(AUTO_APPLY_KEY, input.checked ? "true" : "false");
+      } catch (_error) {
+        // The control remains useful for this page when storage is unavailable.
+      }
+      if (input.checked) submit();
+    });
+
+    form.addEventListener("change", function (event) {
+      if (!input.checked || event.target === input || event.target === search) return;
+      submit();
+    });
+
+    if (search) {
+      search.addEventListener("input", function () {
+        if (!input.checked) return;
+        window.clearTimeout(timer);
+        timer = window.setTimeout(submit, AUTO_APPLY_DELAY);
+      });
+    }
+
+    form.addEventListener("submit", function () {
+      window.clearTimeout(timer);
+    });
+  }
+
   document.addEventListener("click", function (event) {
     var button = event.target.closest("[data-copy-target]");
     if (button) copyText(button);
@@ -120,5 +171,6 @@
     formatRelativeTimes();
     initializeAutoRefresh();
     initializeRetentionCount();
+    initializeAutoApply();
   });
 })();

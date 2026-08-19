@@ -10,18 +10,30 @@ RSpec.describe RestGate::LogInspector do
 
   after { FileUtils.remove_entry(directory) }
 
-  def write_record(filename, path:, query: '', status: 200, duration: 10.0, body_file: nil, retention: nil)
+  def write_record(
+    filename,
+    path:,
+    query: '',
+    status: 200,
+    duration: 10.0,
+    body_file: nil,
+    retention: nil,
+    request_method: 'GET',
+    upstream: 'http://objectfinder:8080',
+    timestamp: '2026-08-14T08:00:00Z',
+    body: '{}'
+  )
     entry = {
-      request: { method: 'GET', path:, query_string: query, headers: {}, body: nil },
+      request: { method: request_method, path:, query_string: query, headers: {}, body: nil },
       response: {
         status:,
         headers: { 'content-type' => 'application/json' },
-        body: '{}',
+        body:,
         body_file:
       }.compact,
-      proxy: { prefix: '/objectfinder', upstream: 'http://objectfinder:8080' },
+      proxy: { prefix: '/objectfinder', upstream: },
       timing: { duration_ms: duration },
-      timestamp: '2026-08-14T08:00:00Z'
+      timestamp:
     }
     entry[:retention] = { definition: retention } if retention
     File.write(File.join(directory, filename), JSON.generate(entry))
@@ -51,6 +63,55 @@ RSpec.describe RestGate::LogInspector do
 
     expect(result.records.first).to be_invalid
     expect(result.errors).to eq(1)
+  end
+
+  it 'sorts every records table column in both directions' do
+    write_record(
+      '20260814T080000000001_zulu.json',
+      path: '/zulu',
+      query: 'id=1',
+      status: 201,
+      duration: 5,
+      request_method: 'POST',
+      upstream: 'http://zulu:8080',
+      timestamp: '2026-08-14T08:00:00Z'
+    )
+    write_record(
+      '20260814T090000000001_alpha.json',
+      path: '/alpha',
+      status: 503,
+      duration: 25,
+      request_method: 'GET',
+      upstream: 'http://alpha:8080',
+      timestamp: '2026-08-14T09:00:00Z',
+      body: 'x' * 500
+    )
+
+    expected_paths = {
+      'time_asc' => %w[/zulu /alpha],
+      'time_desc' => %w[/alpha /zulu],
+      'method_asc' => %w[/alpha /zulu],
+      'method_desc' => %w[/zulu /alpha],
+      'path_asc' => %w[/alpha /zulu],
+      'path_desc' => %w[/zulu /alpha],
+      'status_asc' => %w[/zulu /alpha],
+      'status_desc' => %w[/alpha /zulu],
+      'duration_asc' => %w[/zulu /alpha],
+      'duration_desc' => %w[/alpha /zulu],
+      'upstream_asc' => %w[/alpha /zulu],
+      'upstream_desc' => %w[/zulu /alpha],
+      'size_asc' => %w[/zulu /alpha],
+      'size_desc' => %w[/alpha /zulu]
+    }
+
+    expected_paths.each do |sort, paths|
+      result = inspector.search('sort' => sort)
+      expect(result.records.map(&:path)).to eq(paths), "expected #{sort} to order records"
+    end
+
+    default_result = inspector.search('sort' => 'unsupported')
+    expect(default_result.records.map(&:path)).to eq(%w[/alpha /zulu])
+    expect([default_result.sort_column, default_result.sort_direction]).to eq(%w[time desc])
   end
 
   it 'combines retention filtering with path and query-presence statistics' do

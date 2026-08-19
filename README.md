@@ -255,9 +255,9 @@ The list page provides:
 
 - free-text search across method, path, raw query, status, upstream, proxy prefix, retention rule, content type, and filename;
 - method, proxy-prefix, status-family, query-presence, and exact retention-rule filters, with the current stored size shown for every retention bucket;
-- per-path statistics for the complete filtered subset, including total, no-query, and with-query counts;
-- newest, oldest, slowest, and highest-status sorting;
-- selectable pagination, a manual refresh action, and optional 15-second auto-refresh;
+- clickable per-path statistics for the complete filtered subset, including proportional request-volume bars and total, no-query, and with-query counts;
+- ascending and descending sorting from every record-table data column, with newest requests first by default;
+- selectable pagination, manual Apply and Refresh actions, opt-in remembered filter auto-apply with debounced search, and optional 15-second auto-refresh;
 - total record, storage-size, and error summaries;
 - a usable responsive view for both desktop and smaller screens.
 

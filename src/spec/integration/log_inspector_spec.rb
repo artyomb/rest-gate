@@ -66,6 +66,50 @@ RSpec.describe 'Stored log inspector', type: :request do
     expect(last_response.body).to include('No request paths exist in the selected subset')
   end
 
+  it 'links path statistics to search and sorts records through clickable columns' do
+    get '/_restgate'
+
+    expect(last_response.status).to eq(200)
+    expect(last_response.body).not_to include('id="sort-filter"')
+    expect(last_response.body).to include(
+      'data-path-filter="/objectfinder/api/search"',
+      'href="/_restgate?q=%2Fobjectfinder%2Fapi%2Fsearch"',
+      '--path-count-share: 100.00%',
+      'data-sort-column="time"',
+      'aria-sort="descending"',
+      'sort=time_asc'
+    )
+
+    get '/_restgate', sort: 'method_asc'
+
+    expect(last_response.body).to include(
+      'data-sort-column="method"',
+      'aria-sort="ascending"',
+      'sort=method_desc'
+    )
+  end
+
+  it 'renders opt-in auto-apply controls while preserving active sorting' do
+    get '/_restgate', sort: 'method_asc'
+
+    expect(last_response.status).to eq(200)
+    expect(last_response.body).to include(
+      'data-auto-apply=""',
+      'data-filter-form=""',
+      'type="hidden"',
+      'name="sort"',
+      'value="method_asc"'
+    )
+
+    get '/_restgate/assets/restgate.js'
+
+    expect(last_response.body).to include(
+      'restgate.logs.autoApply.v1',
+      'form.requestSubmit()',
+      'AUTO_APPLY_DELAY = 450'
+    )
+  end
+
   it 'renders details with sensitive headers redacted by default' do
     get "/_restgate/logs/#{filename}"
 
