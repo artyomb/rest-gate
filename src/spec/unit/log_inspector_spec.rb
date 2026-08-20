@@ -170,4 +170,44 @@ RSpec.describe RestGate::LogInspector do
     detail.entry['response']['body_file'] = 'unrelated.png'
     expect { inspector.attachment(detail) }.to raise_error(described_class::NotFound)
   end
+  it 'deletes a JSON record and its referenced binary attachment from the index' do
+    filename = '20260814T080000000001_record.json'
+    attachment = '20260814T080000000001_record.png'
+    write_record(filename, path: '/objectfinder/image', body_file: attachment)
+    File.binwrite(File.join(directory, attachment), 'image')
+    expect(inspector.search.total).to eq(1)
+
+    deleted = inspector.delete(filename)
+
+    expect(deleted.to_h).to eq(filename:, attachment:)
+    expect(File.exist?(File.join(directory, filename))).to be(false)
+    expect(File.exist?(File.join(directory, attachment))).to be(false)
+    expect(inspector.search.total).to eq(0)
+  end
+
+  it 'deletes invalid JSON without touching unrelated files or accepting paths' do
+    filename = '20260814T080000000001_invalid.json'
+    unrelated = 'unrelated.png'
+    File.write(File.join(directory, filename), '{invalid')
+    File.binwrite(File.join(directory, unrelated), 'keep')
+
+    expect { inspector.delete('../record.json') }.to raise_error(described_class::NotFound)
+    deleted = inspector.delete(filename)
+
+    expect(deleted.to_h).to eq(filename:, attachment: nil)
+    expect(File.exist?(File.join(directory, filename))).to be(false)
+    expect(File.exist?(File.join(directory, unrelated))).to be(true)
+  end
+
+  it 'does not delete an attachment that does not belong to the selected record' do
+    filename = '20260814T080000000001_record.json'
+    unrelated = 'unrelated.png'
+    write_record(filename, path: '/objectfinder/image', body_file: unrelated)
+    File.binwrite(File.join(directory, unrelated), 'keep')
+
+    inspector.delete(filename)
+
+    expect(File.exist?(File.join(directory, unrelated))).to be(true)
+  end
+
 end

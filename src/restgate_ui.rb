@@ -90,6 +90,20 @@ rescue RestGate::LogInspector::NotFound, RestGate::LogInspector::Unreadable => e
   halt 404, e.message
 end
 
+delete '/_restgate/logs/:filename' do
+  fetch_site = request.env['HTTP_SEC_FETCH_SITE'].to_s
+  halt 403, 'Cross-site record deletion is not allowed' unless fetch_site.empty? || fetch_site == 'same-origin'
+  halt 400, 'Record deletion requires confirmation from the Rest Gate UI' unless request.env['HTTP_X_RESTGATE_ACTION'] == 'delete-record'
+
+  deleted = settings.log_inspector.delete(params['filename'])
+  content_type :json
+  JSON.generate(filename: deleted.filename, attachment: deleted.attachment)
+rescue RestGate::LogInspector::NotFound => e
+  halt 404, e.message
+rescue RestGate::LogInspector::Unreadable => e
+  halt 422, e.message
+end
+
 get '/_restgate/logs/:filename' do
   @detail = settings.log_inspector.find(params['filename'])
   @reveal_sensitive = params['reveal'] == '1'

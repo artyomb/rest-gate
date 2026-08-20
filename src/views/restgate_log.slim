@@ -16,6 +16,7 @@
     a.button.subtle href="/_restgate/logs/#{record.filename}/raw" Download raw JSON
     - if record.body_file
       a.button.subtle href="/_restgate/logs/#{record.filename}/body" target='_blank' rel='noopener' Open binary body
+    button.button.danger.destructive-action type='button' data-delete-record=true data-delete-url="/_restgate/logs/#{record.filename}" data-delete-return=restgate_back_url data-delete-label=record.display_path data-delete-attachment=(record.body_file ? 'true' : 'false') Delete record
 
 .status-strip aria-label='Record summary'
   .status-item class="status-#{restgate_status_tone(record.status)}"

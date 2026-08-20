@@ -152,9 +152,51 @@
     });
   }
 
+  function deleteRecord(button) {
+    var label = button.dataset.deleteLabel || "this record";
+    var attachment = button.dataset.deleteAttachment === "true";
+    var files = attachment ? "the JSON record and its binary attachment" : "the JSON record";
+    var confirmed = window.confirm(
+      "Delete stored record?\n\n" + label + "\n\nThis permanently removes " + files + ". This cannot be undone."
+    );
+    if (!confirmed) return;
+
+    var original = button.textContent;
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    button.textContent = "Deleting…";
+
+    window.fetch(button.dataset.deleteUrl, {
+      method: "DELETE",
+      credentials: "same-origin",
+      headers: {
+        "Accept": "application/json",
+        "X-Restgate-Action": "delete-record"
+      }
+    }).then(function (response) {
+      if (response.ok || response.status === 404) return;
+      return response.text().then(function (message) {
+        throw new Error(message || "The record could not be deleted.");
+      });
+    }).then(function () {
+      window.location.assign(button.dataset.deleteReturn || "/_restgate");
+    }).catch(function (error) {
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+      button.textContent = original;
+      window.alert(error.message || "The record could not be deleted.");
+    });
+  }
+
   document.addEventListener("click", function (event) {
-    var button = event.target.closest("[data-copy-target]");
-    if (button) copyText(button);
+    var deleteButton = event.target.closest("[data-delete-record]");
+    if (deleteButton) {
+      deleteRecord(deleteButton);
+      return;
+    }
+
+    var copyButton = event.target.closest("[data-copy-target]");
+    if (copyButton) copyText(copyButton);
   });
 
   document.addEventListener("keydown", function (event) {

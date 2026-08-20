@@ -77,6 +77,7 @@ module RestGate
     )
 
     Detail = Struct.new(:record, :entry, :path, keyword_init: true)
+    Deleted = Struct.new(:filename, :attachment, keyword_init: true)
 
     class NotFound < StandardError; end
     class Unreadable < StandardError; end
@@ -133,15 +134,25 @@ module RestGate
     def attachment(detail)
       filename = detail.entry.dig('response', 'body_file').to_s
       raise NotFound, 'This record has no binary response attachment' if filename.empty?
-      raise NotFound, 'Invalid binary response attachment name' unless SAFE_ATTACHMENT_FILENAME.match?(filename)
-
-      expected_prefix = "#{File.basename(detail.record.filename, '.json')}."
-      raise NotFound, 'Binary response attachment does not belong to this record' unless filename.start_with?(expected_prefix)
-
-      path = File.join(@directory, filename)
+      path = attachment_path(detail.record.filename, filename)
       raise NotFound, 'Binary response attachment was not found' unless File.file?(path)
 
       path
+    end
+
+    def delete(filename)
+      @mutex.synchronize do
+        path = json_path(filename)
+        attachment = referenced_attachment(path, filename)
+        File.delete(attachment) if attachment
+        File.delete(path)
+        @cache.delete(filename)
+        Deleted.new(filename:, attachment: attachment && File.basename(attachment))
+      end
+    rescue Errno::EACCES, Errno::EPERM, Errno::EROFS => e
+      raise Unreadable, "Stored log could not be deleted: #{e.message}"
+    rescue Errno::ENOENT
+      raise NotFound, "Stored log was not found: #{filename}"
     end
 
     private
@@ -317,6 +328,25 @@ module RestGate
       raise NotFound, "Stored log was not found: #{filename}" unless File.file?(path)
 
       path
+    end
+
+    def attachment_path(record_filename, filename)
+      raise NotFound, 'Invalid binary response attachment name' unless SAFE_ATTACHMENT_FILENAME.match?(filename)
+
+      expected_prefix = "#{File.basename(record_filename, '.json')}."
+      raise NotFound, 'Binary response attachment does not belong to this record' unless filename.start_with?(expected_prefix)
+
+      File.join(@directory, filename)
+    end
+
+    def referenced_attachment(path, record_filename)
+      filename = JSON.parse(File.read(path)).dig('response', 'body_file').to_s
+      return if filename.empty?
+
+      candidate = attachment_path(record_filename, filename)
+      candidate if File.file?(candidate)
+    rescue JSON::ParserError, NotFound
+      nil
     end
 
     def attachment_size(filename)

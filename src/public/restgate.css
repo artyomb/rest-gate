@@ -114,6 +114,27 @@ button.primary:hover,
   filter: brightness(0.96);
 }
 
+button.danger,
+.button.danger {
+  border-color: color-mix(in srgb, var(--danger) 44%, var(--line));
+  background: var(--panel);
+  color: var(--danger);
+}
+
+button.danger:hover,
+.button.danger:hover {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+button:disabled,
+.button[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.6;
+  pointer-events: none;
+}
+
 button.subtle,
 .button.subtle {
   background: var(--panel);
@@ -267,6 +288,10 @@ h3 {
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+.destructive-action {
+  margin-left: var(--space-2);
 }
 
 .back-link {
@@ -720,7 +745,7 @@ tbody tr:last-child td {
 .records-table th:nth-child(5) { width: 92px; }
 .records-table th:nth-child(6) { width: 190px; }
 .records-table th:nth-child(7) { width: 78px; }
-.records-table th:nth-child(8) { width: 68px; }
+.records-table th:nth-child(8) { width: 136px; }
 
 .time-cell,
 .path-cell,
@@ -770,6 +795,10 @@ tbody tr:last-child td {
 
 .actions-column {
   text-align: right;
+}
+
+.actions-column .button + .button {
+  margin-left: var(--space-1);
 }
 
 .invalid-row {
@@ -1035,6 +1064,7 @@ details.inspection > summary:hover {
 
 .card-actions {
   justify-content: flex-end;
+  gap: var(--space-2);
   margin-top: var(--space-3);
 }
 
@@ -1081,6 +1111,10 @@ details.inspection > summary:hover {
 
   .page-actions {
     justify-content: flex-start;
+  }
+
+  .destructive-action {
+    margin-left: 0;
   }
 
   .status-strip {

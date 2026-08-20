@@ -196,6 +196,7 @@ section.section aria-labelledby='records-heading'
                   a.button.compact.subtle href="/_restgate/logs/#{record.filename}/raw" Raw
                 - else
                   a.button.compact.subtle href=restgate_record_url(record.filename) Open
+                button.button.compact.danger type='button' data-delete-record=true data-delete-url="/_restgate/logs/#{record.filename}" data-delete-return=restgate_list_url data-delete-label=(record.invalid? ? record.filename : record.display_path) data-delete-attachment=(record.body_file ? 'true' : 'false') Delete
 
     .responsive-list
       - @result.records.each do |record|
@@ -226,6 +227,7 @@ section.section aria-labelledby='records-heading'
               a.button.compact.subtle href="/_restgate/logs/#{record.filename}/raw" Download raw
             - else
               a.button.compact.subtle href=restgate_record_url(record.filename) Open record
+            button.button.compact.danger type='button' data-delete-record=true data-delete-url="/_restgate/logs/#{record.filename}" data-delete-return=restgate_list_url data-delete-label=(record.invalid? ? record.filename : record.display_path) data-delete-attachment=(record.body_file ? 'true' : 'false') Delete
 
     - if @result.pages > 1
       nav.pagination aria-label='Record pages'

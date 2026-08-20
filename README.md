@@ -249,7 +249,7 @@ Regular expressions operate on the raw query string. Values may still be percent
 
 ## Stored log inspector
 
-Open `http://<rest-gate-host>:<port>/_restgate` to inspect the files in `REQUEST_RESPONSE_LOG_DIR`. The interface is read-only: it does not delete records, replay requests, or change retention state.
+Open `http://<rest-gate-host>:<port>/_restgate` to inspect the files in `REQUEST_RESPONSE_LOG_DIR`. The interface can delete individual stored records, but it does not replay requests or change retention state.
 
 The list page provides:
 
@@ -259,6 +259,7 @@ The list page provides:
 - ascending and descending sorting from every record-table data column, with newest requests first by default;
 - selectable pagination, manual Apply and Refresh actions, opt-in remembered filter auto-apply with debounced search, and optional 15-second auto-refresh;
 - total record, storage-size, and error summaries;
+- confirmed deletion of individual records from desktop, mobile, and detail views;
 - a usable responsive view for both desktop and smaller screens.
 
 All filters use AND semantics and path statistics are calculated before pagination, so the statistics and record list always describe the same selected subset. Search terms are case-insensitive and are also combined with AND semantics. For example, `POST SectionCode=E aeromap` only shows records whose indexed metadata contains all three terms. The inspector caches parsed summaries and refreshes only added, changed, or removed files. Proxy requests do not scan the log directory merely because the UI is enabled.
@@ -266,6 +267,8 @@ All filters use AND semantics and path statistics are calculated before paginati
 Records written by this version retain their original winning rule even if `RETENTION` later changes. For older JSON files without retention metadata, the inspector attributes a rule using the current `RETENTION` configuration when one matches.
 
 Opening a record shows the incoming and upstream paths, decoded query parameters, headers, request and response bodies, status, duration, proxy metadata, and attributed retention rule. JSON bodies are formatted for reading. Large text bodies are previewed according to `RESTGATE_UI_BODY_PREVIEW_BYTES`; the original stored JSON remains available as a download. Binary response sidecars can be opened from the same detail page.
+
+Deleting a record permanently removes its JSON file and its referenced binary response sidecar, when present. The UI always asks for confirmation. The deletion endpoint accepts only the inspector's same-origin JavaScript request shape and validates both filenames before accessing the log directory.
 
 Sensitive request and response headers are hidden by default in rendered pages. The user may explicitly reveal them. Raw JSON downloads are exact stored files and are therefore never redacted.
 

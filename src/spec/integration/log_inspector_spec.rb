@@ -170,4 +170,46 @@ RSpec.describe 'Stored log inspector', type: :request do
     expect(status).to be_success, "#{stdout}\n#{stderr}"
     expect(stdout).to include('UI not loaded; prefix reserved')
   end
+  it 'renders confirmed delete actions in list and detail views' do
+    get '/_restgate'
+    expect(last_response.body).to include('data-delete-record=""', '>Delete</button>')
+
+    get "/_restgate/logs/#{filename}"
+    expect(last_response.body).to include('Delete record', 'data-delete-return="/_restgate"')
+
+    get '/_restgate/assets/restgate.js'
+    expect(last_response.body).to include('window.confirm(', 'X-Restgate-Action', 'method: "DELETE"')
+  end
+
+  it 'requires the UI action header and deletes the record with its attachment' do
+    attachment = '20260814T080000000001_record.png'
+    entry[:response][:body_file] = attachment
+    File.write(File.join(directory, filename), JSON.generate(entry))
+    File.binwrite(File.join(directory, attachment), 'image')
+
+    get "/_restgate/logs/#{filename}"
+    expect(last_response.body).to include('data-delete-attachment="true"')
+
+    delete "/_restgate/logs/#{filename}"
+    expect(last_response.status).to eq(400)
+    expect(File.exist?(File.join(directory, filename))).to be(true)
+
+    delete "/_restgate/logs/#{filename}", {}, {
+      'HTTP_X_RESTGATE_ACTION' => 'delete-record',
+      'HTTP_SEC_FETCH_SITE' => 'cross-site'
+    }
+    expect(last_response.status).to eq(403)
+    expect(File.exist?(File.join(directory, filename))).to be(true)
+
+    delete "/_restgate/logs/#{filename}", {}, {
+      'HTTP_X_RESTGATE_ACTION' => 'delete-record',
+      'HTTP_SEC_FETCH_SITE' => 'same-origin'
+    }
+
+    expect(last_response.status).to eq(200)
+    expect(JSON.parse(last_response.body)).to eq('filename' => filename, 'attachment' => attachment)
+    expect(File.exist?(File.join(directory, filename))).to be(false)
+    expect(File.exist?(File.join(directory, attachment))).to be(false)
+  end
+
 end
