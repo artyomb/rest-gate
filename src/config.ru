@@ -69,6 +69,7 @@ if RESTGATE_UI_ENABLED
   RestGate::UI.register_middleware(self)
 end
 StackServiceBase.rack_setup self
+use Rack::TempfileReaper
 
 def parse_proxy_map(proxy_map)
   proxy_map.gsub(/\s+/, '').split(',').reject(&:empty?).to_h { parse_proxy_map_entry(_1) }
@@ -267,10 +268,13 @@ helpers do
   end
 
   def build_request_headers
-    request.env.each_with_object('Accept-Encoding' => 'identity', 'Content-Type' => request.content_type) do |(key, value), headers|
+    request.env.each_with_object('Accept-Encoding' => 'identity') do |(key, value), headers|
       next unless key.start_with?('HTTP_')
       header = key.delete_prefix('HTTP_').tr('_', '-').split('-').map(&:capitalize).join('-')
       headers[header] = value unless REQUEST_HEADERS_TO_SKIP.include?(header.downcase)
+    end.tap do |headers|
+      content_type = request.env['CONTENT_TYPE'].to_s
+      headers['Content-Type'] = content_type unless content_type.empty?
     end
   end
 

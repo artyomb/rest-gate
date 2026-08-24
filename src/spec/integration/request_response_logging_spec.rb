@@ -127,6 +127,18 @@ RSpec.describe "Request and response logging", type: :request do
     )
   end
 
+  it "forwards multipart content-type parameters together with the body" do
+    upload = Rack::Test::UploadedFile.new(__FILE__, "text/plain")
+
+    post "/proxy/api/upload", { "file" => upload, "comments" => "demo" }
+
+    expect(last_response.status).to eq(201)
+    expect(client.calls[0..1]).to eq([:post, "/api/upload"])
+    expect(client.calls[2]).to include('name="file"', 'name="comments"', 'demo')
+    expect(client.calls[3]).to include("Accept-Encoding" => "identity")
+    expect(client.calls[3].fetch("Content-Type")).to include("multipart/form-data", "boundary=")
+  end
+
   it "stores binary responses in a sibling file and references it from json" do
     binary_body = "\x89PNG\r\n\x1A\nbinary-image".b
     client = FakeProxyClient.new(FakeUpstreamResponse.new(200, { "content-type" => "image/png" }, binary_body))
