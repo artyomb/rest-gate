@@ -5,6 +5,14 @@ require_relative "../support/rack_helper"
 
 FakeUpstreamResponse = Struct.new(:status, :headers, :body)
 
+class NonRewindableInput
+  def initialize(body) = @input = StringIO.new(body)
+  def read(...) = @input.read(...)
+  def gets = @input.gets
+  def each(&block) = @input.each(&block)
+  def rewind = false
+end
+
 class FakeProxyClient
   attr_reader :calls
 
@@ -127,12 +135,21 @@ RSpec.describe "Request and response logging", type: :request do
     )
   end
 
-  it "forwards multipart content-type parameters together with the body" do
+  it "forwards multipart from a non-rewindable server input" do
     upload = Rack::Test::UploadedFile.new(__FILE__, "text/plain")
+    multipart_body = Rack::Test::Utils.build_multipart("file" => upload, "comments" => "demo")
+    content_type = "multipart/form-data; boundary=#{Rack::Test::MULTIPART_BOUNDARY}"
+    env = Rack::MockRequest.env_for(
+      "/proxy/api/upload",
+      method: "POST",
+      input: NonRewindableInput.new(multipart_body),
+      "CONTENT_TYPE" => content_type,
+      "CONTENT_LENGTH" => multipart_body.bytesize.to_s
+    )
 
-    post "/proxy/api/upload", { "file" => upload, "comments" => "demo" }
+    status, = app.call(env)
 
-    expect(last_response.status).to eq(201)
+    expect(status).to eq(201)
     expect(client.calls[0..1]).to eq([:post, "/api/upload"])
     expect(client.calls[2]).to include('name="file"', 'name="comments"', 'demo')
     expect(client.calls[3]).to include("Accept-Encoding" => "identity")

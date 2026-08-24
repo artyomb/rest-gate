@@ -69,6 +69,12 @@ if RESTGATE_UI_ENABLED
   RestGate::UI.register_middleware(self)
 end
 StackServiceBase.rack_setup self
+use Rack.middleware_klass do |env, app|
+  input = env['rack.input'] = Rack::RewindableInput.new(env['rack.input'])
+  app.call(env)
+ensure
+  input&.close
+end
 use Rack::TempfileReaper
 
 def parse_proxy_map(proxy_map)
