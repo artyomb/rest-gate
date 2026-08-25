@@ -1,4 +1,6 @@
 require "json"
+require "protocol/http"
+require "protocol/rack"
 require "tmpdir"
 require "uri"
 require_relative "../support/rack_helper"
@@ -125,6 +127,108 @@ RSpec.describe "Request and response logging", type: :request do
       "X-Forwarded-Host" => "rest.example.test",
       "X-Request-Id" => "request-123"
     )
+  end
+
+  it "preserves JSON bodies and end-to-end headers through Falcon's Rack adapter" do
+    request_body = '{"str":"UUBW"}'
+    protocol_request = Protocol::HTTP::Request[
+      "POST",
+      "/proxy/api/AeroData/search?str=UUBW",
+      { "authorization" => "Bearer test-token", "content-type" => "application/json", "traceparent" => "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01" },
+      request_body,
+      scheme: "http",
+      authority: "localhost"
+    ]
+    protocol_request.version = "HTTP/1.1"
+    adapter = Protocol::Rack::Adapter.new(app)
+
+    response = adapter.call(protocol_request)
+
+    expect(response.status).to eq(201)
+    expect(client.calls[0..2]).to eq([:post, "/api/AeroData/search?str=UUBW", request_body])
+    expect(client.calls[3]).to include("Authorization" => "Bearer test-token", "Content-Type" => "application/json")
+  ensure
+    response&.body&.close
+  end
+
+  it "forwards a bodyless POST when the server supplies no rack.input" do
+    env = Rack::MockRequest.env_for("/proxy/api/reload", method: "POST")
+    env["rack.input"] = nil
+
+    status, _, response_body = app.call(env)
+    response_body.close if response_body.respond_to?(:close)
+
+    expect(status).to eq(201)
+    expect(client.calls[0..2]).to eq([:post, "/api/reload", ""])
+  end
+
+  it "forwards DELETE request bodies" do
+    request_body = '{"id":123}'
+
+    delete "/proxy/api/items/123", request_body, { "CONTENT_TYPE" => "application/json" }
+
+    expect(last_response.status).to eq(201)
+    expect(client.calls[0..2]).to eq([:delete, "/api/items/123", request_body])
+  end
+
+  it "removes fixed and Connection-nominated hop headers from requests" do
+    header "Connection", "keep-alive, X-Internal-Hop"
+    header "Keep-Alive", "timeout=60"
+    header "TE", "trailers"
+    header "X-Internal-Hop", "private"
+    header "X-End-To-End", "forwarded"
+
+    get "/proxy/api/items"
+
+    forwarded_headers = client.calls[3]
+    expect(forwarded_headers).to include("X-End-To-End" => "forwarded")
+    expect(forwarded_headers.keys.map(&:downcase)).not_to include("connection", "keep-alive", "te", "x-internal-hop")
+  end
+
+  it "removes fixed and Connection-nominated hop headers from responses" do
+    response = FakeUpstreamResponse.new(
+      200,
+      {
+        "connection" => "keep-alive, x-internal-hop",
+        "keep-alive" => "timeout=60",
+        "te" => "trailers",
+        "x-internal-hop" => "private",
+        "x-end-to-end" => "forwarded"
+      },
+      "ok"
+    )
+    Sinatra::Application.set :http_clients, {
+      "/proxy" => upstream_config.merge(connection: FakeProxyClient.new(response))
+    }
+
+    get "/proxy/api/items"
+
+    expect(last_response.headers).to include("x-end-to-end" => "forwarded")
+    expect(last_response.headers.keys.map(&:downcase)).not_to include("connection", "keep-alive", "te", "x-internal-hop")
+  end
+
+  it "returns the upstream response when persistence fails" do
+    allow_any_instance_of(Sinatra::Application).to receive(:append_request_response_log).and_raise(IOError, "disk unavailable")
+
+    post "/proxy/api/items", '{}', { "CONTENT_TYPE" => "application/json" }
+
+    expect(last_response.status).to eq(201)
+    expect(last_response.body).to eq(upstream_response.body)
+    expect(Dir.children(log_dir)).to be_empty
+  end
+
+  it "leaves 5xx response framing to the server" do
+    response_body = "<h1>Internal Server Error</h1>"
+    response = FakeUpstreamResponse.new(500, { "content-type" => "text/html" }, response_body)
+    Sinatra::Application.set :http_clients, {
+      "/proxy" => upstream_config.merge(connection: FakeProxyClient.new(response))
+    }
+
+    get "/proxy/api/items"
+
+    expect(last_response.status).to eq(500)
+    expect(last_response.body).to eq(response_body)
+    expect(last_response.original_headers.keys.map(&:downcase)).not_to include("content-length")
   end
 
   it "stores binary responses in a sibling file and references it from json" do

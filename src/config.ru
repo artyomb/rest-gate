@@ -21,9 +21,12 @@ RESTGATE_UI_ENABLED = ENV.fetch('RESTGATE_UI_ENABLED', 'true').downcase == 'true
 # Comma-separated N:{METHODS}+{QUERY:regexp}+{URL:regexp} rules; later matches take precedence.
 RETENTION = ENV.fetch('RETENTION', '')
 BINARY_CONTENT_TYPE_PATTERN = /octet-stream|x-protobuf|image|video|audio|font|pdf|zip/
-BODYLESS_METHODS = %i[get head delete options].freeze
-REQUEST_HEADERS_TO_SKIP = %w[host connection proxy-connection content-length accept-encoding].freeze
-RESPONSE_HEADERS_TO_SKIP = %w[connection proxy-connection transfer-encoding content-length].freeze
+BODYLESS_METHODS = %i[get head].freeze
+HOP_BY_HOP_HEADERS = %w[
+  connection keep-alive proxy-authenticate proxy-authorization public te trailer transfer-encoding upgrade
+].freeze
+REQUEST_HEADERS_TO_SKIP = (HOP_BY_HOP_HEADERS + %w[host proxy-connection content-length accept-encoding]).freeze
+RESPONSE_HEADERS_TO_SKIP = (HOP_BY_HOP_HEADERS + %w[proxy-connection content-length]).freeze
 
 module Retention
   module_function
@@ -66,8 +69,20 @@ RETENTION_RULES = Retention.parse(RETENTION)
 
 if RESTGATE_UI_ENABLED
   require_relative 'restgate_ui'
-  RestGate::UI.register_middleware(self)
 end
+
+# StackServiceBase may append a trace ID to 5xx bodies after Sinatra has set
+# Content-Length. Let the HTTP server calculate the final response framing.
+use Rack.middleware_klass do |env, app|
+  status, headers, body = app.call(env)
+  if status.to_i >= 500
+    headers = headers.dup
+    headers.delete_if { |name, _| name.to_s.casecmp?('content-length') }
+  end
+  [status, headers, body]
+end
+
+RestGate::UI.register_middleware(self) if RESTGATE_UI_ENABLED
 StackServiceBase.rack_setup self
 
 def parse_proxy_map(proxy_map)
@@ -231,8 +246,8 @@ helpers do
     copy_headers_from_response(response.headers)
     body response_body
 
-    otl_span("restgate.persist_request_response") do
-      append_request_response_log({
+    persist_request_response(response_body:, response_content_type: response.headers['content-type']) do
+      {
         request: {
           method: request.request_method,
           path: request.path_info,
@@ -254,7 +269,7 @@ helpers do
         timing: {
           duration_ms: duration_ms
         }
-      }, response_body:, response_content_type: response.headers['content-type'])
+      }
     end
   end
 
@@ -267,17 +282,30 @@ helpers do
   end
 
   def build_request_headers
-    request.env.each_with_object('Accept-Encoding' => 'identity', 'Content-Type' => request.content_type) do |(key, value), headers|
+    request_headers = request.env.each_with_object({}) do |(key, value), result|
       next unless key.start_with?('HTTP_')
       header = key.delete_prefix('HTTP_').tr('_', '-').split('-').map(&:capitalize).join('-')
-      headers[header] = value unless REQUEST_HEADERS_TO_SKIP.include?(header.downcase)
+      result[header] = value
     end
+    skipped_headers = header_names_to_skip(request_headers, REQUEST_HEADERS_TO_SKIP)
+    request_headers.reject! { |name, _| skipped_headers.include?(name.to_s.downcase) }
+    request_headers['Accept-Encoding'] = 'identity'
+
+    content_type = request.env['CONTENT_TYPE'].to_s
+    request_headers['Content-Type'] = content_type unless content_type.empty?
+    request_headers
   end
 
   def copy_headers_from_response(response_headers)
+    skipped_headers = header_names_to_skip(response_headers, RESPONSE_HEADERS_TO_SKIP)
     response_headers.each do |name, value|
-      headers[name] = value unless RESPONSE_HEADERS_TO_SKIP.include?(name.downcase)
+      headers[name] = value unless skipped_headers.include?(name.to_s.downcase)
     end
+  end
+
+  def header_names_to_skip(source_headers, defaults)
+    connection = source_headers.find { |name, _| name.to_s.casecmp?('connection') }&.last
+    defaults | Array(connection).join(',').split(',').map { _1.strip.downcase }.reject(&:empty?)
   end
 
   def read_request_body
@@ -300,6 +328,19 @@ helpers do
     return body if body.bytesize <= REQUEST_RESPONSE_LOG_BODY_LIMIT
 
     "#{body.byteslice(0, REQUEST_RESPONSE_LOG_BODY_LIMIT)}...[truncated #{body.bytesize - REQUEST_RESPONSE_LOG_BODY_LIMIT} bytes]"
+  end
+
+  def persist_request_response(response_body:, response_content_type:)
+    otl_span("restgate.persist_request_response") do
+      entry = yield
+      append_request_response_log(entry, response_body:, response_content_type:)
+    end
+  rescue StandardError => e
+    LOGGER.error(
+      "Failed to persist request/response log for #{request.request_method} #{request.path_info}: " \
+      "#{e.class}: #{e.message}"
+    )
+    nil
   end
 
   def append_request_response_log(entry, response_body:, response_content_type:)
