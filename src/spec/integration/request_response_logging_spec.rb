@@ -10,7 +10,6 @@ class NonRewindableInput
   def read(...) = @input.read(...)
   def gets = @input.gets
   def each(&block) = @input.each(&block)
-  def rewind = false
 end
 
 class FakeProxyClient
@@ -133,6 +132,61 @@ RSpec.describe "Request and response logging", type: :request do
       "X-Forwarded-Host" => "rest.example.test",
       "X-Request-Id" => "request-123"
     )
+  end
+
+  it "removes fixed and Connection-nominated hop headers from requests" do
+    header "Connection", "keep-alive, X-Internal-Hop"
+    header "Keep-Alive", "timeout=60"
+    header "TE", "trailers"
+    header "X-Internal-Hop", "private"
+    header "X-End-To-End", "forwarded"
+
+    get "/proxy/api/items"
+
+    forwarded_headers = client.calls[3]
+    expect(forwarded_headers).to include("X-End-To-End" => "forwarded")
+    expect(forwarded_headers.keys.map(&:downcase)).not_to include(
+      "connection", "keep-alive", "te", "x-internal-hop"
+    )
+  end
+
+  it "removes fixed and Connection-nominated hop headers from responses" do
+    response = FakeUpstreamResponse.new(
+      200,
+      {
+        "connection" => "keep-alive, x-internal-hop",
+        "keep-alive" => "timeout=60",
+        "te" => "trailers",
+        "x-internal-hop" => "private",
+        "x-end-to-end" => "forwarded"
+      },
+      "ok"
+    )
+    Sinatra::Application.set :http_clients, {
+      "/proxy" => upstream_config.merge(connection: FakeProxyClient.new(response))
+    }
+
+    get "/proxy/api/items"
+
+    expect(last_response.headers).to include("x-end-to-end" => "forwarded")
+    expect(last_response.headers.keys.map(&:downcase)).not_to include(
+      "connection", "keep-alive", "te", "x-internal-hop"
+    )
+  end
+
+  it "leaves 5xx response framing to the server because telemetry may extend the body" do
+    response_body = "<h1>Internal Server Error</h1>"
+    response = FakeUpstreamResponse.new(500, { "content-type" => "text/html" }, response_body)
+    Sinatra::Application.set :http_clients, {
+      "/proxy" => upstream_config.merge(connection: FakeProxyClient.new(response))
+    }
+
+    get "/proxy/api/items"
+
+    expect(last_response.status).to eq(500)
+    expect(last_response.body).to eq(response_body)
+    expect(last_response.original_headers.keys.map(&:downcase)).not_to include("content-length")
+    expect(last_response.headers.fetch("content-length")).to eq(response_body.bytesize.to_s)
   end
 
   it "forwards multipart from a non-rewindable server input" do

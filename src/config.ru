@@ -22,8 +22,11 @@ RESTGATE_UI_ENABLED = ENV.fetch('RESTGATE_UI_ENABLED', 'true').downcase == 'true
 RETENTION = ENV.fetch('RETENTION', '')
 BINARY_CONTENT_TYPE_PATTERN = /octet-stream|x-protobuf|image|video|audio|font|pdf|zip/
 BODYLESS_METHODS = %i[get head delete options].freeze
-REQUEST_HEADERS_TO_SKIP = %w[host connection proxy-connection content-length accept-encoding].freeze
-RESPONSE_HEADERS_TO_SKIP = %w[connection proxy-connection transfer-encoding content-length].freeze
+HOP_BY_HOP_HEADERS = %w[
+  connection keep-alive proxy-authenticate proxy-authorization public te trailer transfer-encoding upgrade
+].freeze
+REQUEST_HEADERS_TO_SKIP = (HOP_BY_HOP_HEADERS + %w[host proxy-connection content-length accept-encoding]).freeze
+RESPONSE_HEADERS_TO_SKIP = (HOP_BY_HOP_HEADERS + %w[proxy-connection content-length]).freeze
 
 module Retention
   module_function
@@ -66,16 +69,23 @@ RETENTION_RULES = Retention.parse(RETENTION)
 
 if RESTGATE_UI_ENABLED
   require_relative 'restgate_ui'
-  RestGate::UI.register_middleware(self)
 end
-StackServiceBase.rack_setup self
+
+# StackServiceBase appends trace IDs to 5xx bodies after Sinatra calculates Content-Length.
+use Rack.middleware_klass do |env, app|
+  status, headers, body = app.call(env)
+  headers.delete('content-length') if status.to_i >= 500
+  [status, headers, body]
+end
+use Rack::TempfileReaper
 use Rack.middleware_klass do |env, app|
   input = env['rack.input'] = Rack::RewindableInput.new(env['rack.input'])
   app.call(env)
 ensure
   input&.close
 end
-use Rack::TempfileReaper
+RestGate::UI.register_middleware(self) if RESTGATE_UI_ENABLED
+StackServiceBase.rack_setup self
 
 def parse_proxy_map(proxy_map)
   proxy_map.gsub(/\s+/, '').split(',').reject(&:empty?).to_h { parse_proxy_map_entry(_1) }
@@ -274,20 +284,30 @@ helpers do
   end
 
   def build_request_headers
-    request.env.each_with_object('Accept-Encoding' => 'identity') do |(key, value), headers|
+    headers = request.env.each_with_object({}) do |(key, value), result|
       next unless key.start_with?('HTTP_')
       header = key.delete_prefix('HTTP_').tr('_', '-').split('-').map(&:capitalize).join('-')
-      headers[header] = value unless REQUEST_HEADERS_TO_SKIP.include?(header.downcase)
-    end.tap do |headers|
-      content_type = request.env['CONTENT_TYPE'].to_s
-      headers['Content-Type'] = content_type unless content_type.empty?
+      result[header] = value
     end
+    skipped_headers = header_names_to_skip(headers, REQUEST_HEADERS_TO_SKIP)
+    headers.reject! { |name, _| skipped_headers.include?(name.downcase) }
+    headers['Accept-Encoding'] = 'identity'
+
+    content_type = request.env['CONTENT_TYPE'].to_s
+    headers['Content-Type'] = content_type unless content_type.empty?
+    headers
   end
 
   def copy_headers_from_response(response_headers)
+    skipped_headers = header_names_to_skip(response_headers, RESPONSE_HEADERS_TO_SKIP)
     response_headers.each do |name, value|
-      headers[name] = value unless RESPONSE_HEADERS_TO_SKIP.include?(name.downcase)
+      headers[name] = value unless skipped_headers.include?(name.downcase)
     end
+  end
+
+  def header_names_to_skip(source_headers, defaults)
+    connection = source_headers.find { |name, _| name.to_s.casecmp?('connection') }&.last
+    defaults | connection.to_s.split(',').map { _1.strip.downcase }.reject(&:empty?)
   end
 
   def read_request_body
