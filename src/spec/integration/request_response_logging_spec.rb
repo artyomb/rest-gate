@@ -210,6 +210,16 @@ RSpec.describe "Request and response logging", type: :request do
     expect(client.calls[3].fetch("Content-Type")).to include("multipart/form-data", "boundary=")
   end
 
+  it "forwards a bodyless POST when the server supplies no rack.input" do
+    env = Rack::MockRequest.env_for("/proxy/api/reload", method: "POST")
+    env["rack.input"] = nil
+
+    status, = app.call(env)
+
+    expect(status).to eq(201)
+    expect(client.calls[0..2]).to eq([:post, "/api/reload", ""])
+  end
+
   it "stores binary responses in a sibling file and references it from json" do
     binary_body = "\x89PNG\r\n\x1A\nbinary-image".b
     client = FakeProxyClient.new(FakeUpstreamResponse.new(200, { "content-type" => "image/png" }, binary_body))

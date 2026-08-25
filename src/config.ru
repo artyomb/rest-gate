@@ -79,7 +79,8 @@ use Rack.middleware_klass do |env, app|
 end
 use Rack::TempfileReaper
 use Rack.middleware_klass do |env, app|
-  input = env['rack.input'] = Rack::RewindableInput.new(env['rack.input'])
+  input = Rack::RewindableInput.new(env['rack.input']) if env['rack.input']
+  env['rack.input'] = input if input
   app.call(env)
 ensure
   input&.close
