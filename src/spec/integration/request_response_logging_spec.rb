@@ -44,6 +44,7 @@ RSpec.describe "Request and response logging", type: :request do
   around do |example|
     app_class = Sinatra::Application
     original_clients = app_class.settings.http_clients
+    @configured_clients = original_clients
     original_log_dir = app_class.settings.request_response_log_dir
     original_log_ttl = app_class.settings.request_response_log_ttl_seconds
     original_cleanup_interval = app_class.settings.request_response_log_cleanup_interval_seconds
@@ -69,6 +70,17 @@ RSpec.describe "Request and response logging", type: :request do
     app_class.set :retention_rules, original_retention_rules
     app_class.set :retention_store, original_retention_store
     FileUtils.remove_entry(log_dir)
+  end
+
+  it "preserves repeated query parameters after Faraday encodes the upstream URL" do
+    connection = @configured_clients.values.first.fetch(:connection)
+    request = connection.build_request(:get) do |faraday_request|
+      faraday_request.url("/search?types=aerodrom_data&types=navaid_data&text=UUBW")
+    end
+    query_pairs = URI.decode_www_form(request.to_env(connection).url.query)
+
+    expect(query_pairs.select { |name, _| name == "types" }.map(&:last)).to eq(%w[aerodrom_data navaid_data])
+    expect(query_pairs).to include(["text", "UUBW"])
   end
 
   it "writes request and response to a dedicated log file" do

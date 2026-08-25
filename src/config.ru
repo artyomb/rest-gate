@@ -193,6 +193,7 @@ configure do
       url: _1.fetch(:url),
       connection: Faraday.new(url: "#{_1.fetch(:scheme)}://#{_1.fetch(:host)}:#{_1.fetch(:port)}") do |f|
         f.request  :retry, max: 2, interval: 0.2, backoff_factor: 2
+        f.options.params_encoder = Faraday::FlatParamsEncoder
         f.options.timeout      = 15
         f.options.open_timeout = 10
         f.adapter :net_http_persistent, pool_size: 10, idle_timeout: 60
