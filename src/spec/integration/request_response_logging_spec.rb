@@ -1,18 +1,9 @@
 require "json"
-require "protocol/http"
-require "protocol/rack"
 require "tmpdir"
 require "uri"
 require_relative "../support/rack_helper"
 
 FakeUpstreamResponse = Struct.new(:status, :headers, :body)
-
-class NonRewindableInput
-  def initialize(body) = @input = StringIO.new(body)
-  def read(...) = @input.read(...)
-  def gets = @input.gets
-  def each(&block) = @input.each(&block)
-end
 
 class FakeProxyClient
   attr_reader :calls
@@ -134,134 +125,6 @@ RSpec.describe "Request and response logging", type: :request do
       "X-Forwarded-Host" => "rest.example.test",
       "X-Request-Id" => "request-123"
     )
-  end
-
-  it "removes fixed and Connection-nominated hop headers from requests" do
-    header "Connection", "keep-alive, X-Internal-Hop"
-    header "Keep-Alive", "timeout=60"
-    header "TE", "trailers"
-    header "X-Internal-Hop", "private"
-    header "X-End-To-End", "forwarded"
-
-    get "/proxy/api/items"
-
-    forwarded_headers = client.calls[3]
-    expect(forwarded_headers).to include("X-End-To-End" => "forwarded")
-    expect(forwarded_headers.keys.map(&:downcase)).not_to include(
-      "connection", "keep-alive", "te", "x-internal-hop"
-    )
-  end
-
-  it "removes fixed and Connection-nominated hop headers from responses" do
-    response = FakeUpstreamResponse.new(
-      200,
-      {
-        "connection" => "keep-alive, x-internal-hop",
-        "keep-alive" => "timeout=60",
-        "te" => "trailers",
-        "x-internal-hop" => "private",
-        "x-end-to-end" => "forwarded"
-      },
-      "ok"
-    )
-    Sinatra::Application.set :http_clients, {
-      "/proxy" => upstream_config.merge(connection: FakeProxyClient.new(response))
-    }
-
-    get "/proxy/api/items"
-
-    expect(last_response.headers).to include("x-end-to-end" => "forwarded")
-    expect(last_response.headers.keys.map(&:downcase)).not_to include(
-      "connection", "keep-alive", "te", "x-internal-hop"
-    )
-  end
-
-  it "leaves 5xx response framing to the server because telemetry may extend the body" do
-    response_body = "<h1>Internal Server Error</h1>"
-    response = FakeUpstreamResponse.new(500, { "content-type" => "text/html" }, response_body)
-    Sinatra::Application.set :http_clients, {
-      "/proxy" => upstream_config.merge(connection: FakeProxyClient.new(response))
-    }
-
-    get "/proxy/api/items"
-
-    expect(last_response.status).to eq(500)
-    expect(last_response.body).to eq(response_body)
-    expect(last_response.original_headers.keys.map(&:downcase)).not_to include("content-length")
-    expect(last_response.headers.fetch("content-length")).to eq(response_body.bytesize.to_s)
-  end
-
-  it "forwards multipart from a non-rewindable server input" do
-    upload = Rack::Test::UploadedFile.new(__FILE__, "text/plain")
-    multipart_body = Rack::Test::Utils.build_multipart("file" => upload, "comments" => "demo")
-    content_type = "multipart/form-data; boundary=#{Rack::Test::MULTIPART_BOUNDARY}"
-    env = Rack::MockRequest.env_for(
-      "/proxy/api/upload",
-      method: "POST",
-      input: NonRewindableInput.new(multipart_body),
-      "CONTENT_TYPE" => content_type,
-      "CONTENT_LENGTH" => multipart_body.bytesize.to_s
-    )
-
-    status, _, response_body = app.call(env)
-    response_body.close if response_body.respond_to?(:close)
-
-    expect(status).to eq(201)
-    expect(client.calls[0..1]).to eq([:post, "/api/upload"])
-    expect(client.calls[2]).to eq(multipart_body)
-    expect(client.calls[3]).to include("Accept-Encoding" => "identity")
-    expect(client.calls[3].fetch("Content-Type")).to include("multipart/form-data", "boundary=")
-  end
-
-  it "forwards URL-encoded form data byte-for-byte" do
-    form_body = "SectionCode=E&SubsectionCode=R&name=first%2Bsecond"
-    env = Rack::MockRequest.env_for(
-      "/proxy/api/form",
-      method: "POST",
-      input: NonRewindableInput.new(form_body),
-      "CONTENT_TYPE" => "application/x-www-form-urlencoded",
-      "CONTENT_LENGTH" => form_body.bytesize.to_s
-    )
-
-    status, _, response_body = app.call(env)
-    response_body.close if response_body.respond_to?(:close)
-
-    expect(status).to eq(201)
-    expect(client.calls[0..2]).to eq([:post, "/api/form", form_body])
-    expect(client.calls[3]).to include("Content-Type" => "application/x-www-form-urlencoded")
-  end
-
-  it "preserves form data through Falcon's Protocol::Rack adapter" do
-    form_body = "SectionCode=E&SubsectionCode=R"
-    protocol_request = Protocol::HTTP::Request[
-      "POST",
-      "/proxy/api/form",
-      { "content-type" => "application/x-www-form-urlencoded" },
-      form_body,
-      scheme: "http",
-      authority: "localhost"
-    ]
-    protocol_request.version = "HTTP/1.1"
-    adapter = Protocol::Rack::Adapter.new(app)
-
-    response = adapter.call(protocol_request)
-
-    expect(response.status).to eq(201)
-    expect(client.calls[0..2]).to eq([:post, "/api/form", form_body])
-    expect(client.calls[3]).to include("Content-Type" => "application/x-www-form-urlencoded")
-  ensure
-    response&.body&.close
-  end
-
-  it "forwards a bodyless POST when the server supplies no rack.input" do
-    env = Rack::MockRequest.env_for("/proxy/api/reload", method: "POST")
-    env["rack.input"] = nil
-
-    status, _, response_body = app.call(env)
-    response_body.close if response_body.respond_to?(:close)
-
-    expect(status).to eq(201)
-    expect(client.calls[0..2]).to eq([:post, "/api/reload", ""])
   end
 
   it "stores binary responses in a sibling file and references it from json" do

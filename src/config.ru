@@ -8,7 +8,6 @@ require 'faraday/net_http_persistent'
 require 'json'
 require 'fileutils'
 require 'securerandom'
-require 'stringio'
 require 'time'
 require 'uri'
 
@@ -23,12 +22,8 @@ RESTGATE_UI_ENABLED = ENV.fetch('RESTGATE_UI_ENABLED', 'true').downcase == 'true
 RETENTION = ENV.fetch('RETENTION', '')
 BINARY_CONTENT_TYPE_PATTERN = /octet-stream|x-protobuf|image|video|audio|font|pdf|zip/
 BODYLESS_METHODS = %i[get head delete options].freeze
-REQUEST_BODY_ENV_KEY = 'restgate.request_body'.freeze
-HOP_BY_HOP_HEADERS = %w[
-  connection keep-alive proxy-authenticate proxy-authorization public te trailer transfer-encoding upgrade
-].freeze
-REQUEST_HEADERS_TO_SKIP = (HOP_BY_HOP_HEADERS + %w[host proxy-connection content-length accept-encoding]).freeze
-RESPONSE_HEADERS_TO_SKIP = (HOP_BY_HOP_HEADERS + %w[proxy-connection content-length]).freeze
+REQUEST_HEADERS_TO_SKIP = %w[host connection proxy-connection content-length accept-encoding].freeze
+RESPONSE_HEADERS_TO_SKIP = %w[connection proxy-connection transfer-encoding content-length].freeze
 
 module Retention
   module_function
@@ -71,23 +66,8 @@ RETENTION_RULES = Retention.parse(RETENTION)
 
 if RESTGATE_UI_ENABLED
   require_relative 'restgate_ui'
+  RestGate::UI.register_middleware(self)
 end
-
-# StackServiceBase appends trace IDs to 5xx bodies after Sinatra calculates Content-Length.
-use Rack.middleware_klass do |env, app|
-  status, headers, body = app.call(env)
-  headers.delete('content-length') if status.to_i >= 500
-  [status, headers, body]
-end
-use Rack::TempfileReaper
-use Rack.middleware_klass do |env, app|
-  # Sinatra parses form parameters before routes, so preserve Falcon's one-pass input first.
-  request_body = env['rack.input']&.read.to_s.b
-  env[REQUEST_BODY_ENV_KEY] = request_body
-  env['rack.input'] = StringIO.new(request_body)
-  app.call(env)
-end
-RestGate::UI.register_middleware(self) if RESTGATE_UI_ENABLED
 StackServiceBase.rack_setup self
 
 def parse_proxy_map(proxy_map)
@@ -287,34 +267,27 @@ helpers do
   end
 
   def build_request_headers
-    headers = request.env.each_with_object({}) do |(key, value), result|
+    request.env.each_with_object('Accept-Encoding' => 'identity', 'Content-Type' => request.content_type) do |(key, value), headers|
       next unless key.start_with?('HTTP_')
       header = key.delete_prefix('HTTP_').tr('_', '-').split('-').map(&:capitalize).join('-')
-      result[header] = value
+      headers[header] = value unless REQUEST_HEADERS_TO_SKIP.include?(header.downcase)
     end
-    skipped_headers = header_names_to_skip(headers, REQUEST_HEADERS_TO_SKIP)
-    headers.reject! { |name, _| skipped_headers.include?(name.downcase) }
-    headers['Accept-Encoding'] = 'identity'
-
-    content_type = request.env['CONTENT_TYPE'].to_s
-    headers['Content-Type'] = content_type unless content_type.empty?
-    headers
   end
 
   def copy_headers_from_response(response_headers)
-    skipped_headers = header_names_to_skip(response_headers, RESPONSE_HEADERS_TO_SKIP)
     response_headers.each do |name, value|
-      headers[name] = value unless skipped_headers.include?(name.downcase)
+      headers[name] = value unless RESPONSE_HEADERS_TO_SKIP.include?(name.downcase)
     end
   end
 
-  def header_names_to_skip(source_headers, defaults)
-    connection = source_headers.find { |name, _| name.to_s.casecmp?('connection') }&.last
-    defaults | connection.to_s.split(',').map { _1.strip.downcase }.reject(&:empty?)
-  end
-
   def read_request_body
-    request.env.fetch(REQUEST_BODY_ENV_KEY)
+    body = request.body
+    return '' unless body
+
+    body.rewind if body.respond_to?(:rewind)
+    body.read.to_s.tap { body.rewind if body.respond_to?(:rewind) }
+  rescue EOFError
+    halt 400, 'Request body stream ended unexpectedly'
   end
 
   def binary_content_type?(content_type) = content_type.to_s.match?(BINARY_CONTENT_TYPE_PATTERN)
