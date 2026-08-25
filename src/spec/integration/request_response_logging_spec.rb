@@ -1,4 +1,6 @@
 require "json"
+require "protocol/http"
+require "protocol/rack"
 require "tmpdir"
 require "uri"
 require_relative "../support/rack_helper"
@@ -201,20 +203,62 @@ RSpec.describe "Request and response logging", type: :request do
       "CONTENT_LENGTH" => multipart_body.bytesize.to_s
     )
 
-    status, = app.call(env)
+    status, _, response_body = app.call(env)
+    response_body.close if response_body.respond_to?(:close)
 
     expect(status).to eq(201)
     expect(client.calls[0..1]).to eq([:post, "/api/upload"])
-    expect(client.calls[2]).to include('name="file"', 'name="comments"', 'demo')
+    expect(client.calls[2]).to eq(multipart_body)
     expect(client.calls[3]).to include("Accept-Encoding" => "identity")
     expect(client.calls[3].fetch("Content-Type")).to include("multipart/form-data", "boundary=")
+  end
+
+  it "forwards URL-encoded form data byte-for-byte" do
+    form_body = "SectionCode=E&SubsectionCode=R&name=first%2Bsecond"
+    env = Rack::MockRequest.env_for(
+      "/proxy/api/form",
+      method: "POST",
+      input: NonRewindableInput.new(form_body),
+      "CONTENT_TYPE" => "application/x-www-form-urlencoded",
+      "CONTENT_LENGTH" => form_body.bytesize.to_s
+    )
+
+    status, _, response_body = app.call(env)
+    response_body.close if response_body.respond_to?(:close)
+
+    expect(status).to eq(201)
+    expect(client.calls[0..2]).to eq([:post, "/api/form", form_body])
+    expect(client.calls[3]).to include("Content-Type" => "application/x-www-form-urlencoded")
+  end
+
+  it "preserves form data through Falcon's Protocol::Rack adapter" do
+    form_body = "SectionCode=E&SubsectionCode=R"
+    protocol_request = Protocol::HTTP::Request[
+      "POST",
+      "/proxy/api/form",
+      { "content-type" => "application/x-www-form-urlencoded" },
+      form_body,
+      scheme: "http",
+      authority: "localhost"
+    ]
+    protocol_request.version = "HTTP/1.1"
+    adapter = Protocol::Rack::Adapter.new(app)
+
+    response = adapter.call(protocol_request)
+
+    expect(response.status).to eq(201)
+    expect(client.calls[0..2]).to eq([:post, "/api/form", form_body])
+    expect(client.calls[3]).to include("Content-Type" => "application/x-www-form-urlencoded")
+  ensure
+    response&.body&.close
   end
 
   it "forwards a bodyless POST when the server supplies no rack.input" do
     env = Rack::MockRequest.env_for("/proxy/api/reload", method: "POST")
     env["rack.input"] = nil
 
-    status, = app.call(env)
+    status, _, response_body = app.call(env)
+    response_body.close if response_body.respond_to?(:close)
 
     expect(status).to eq(201)
     expect(client.calls[0..2]).to eq([:post, "/api/reload", ""])

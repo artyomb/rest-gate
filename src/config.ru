@@ -8,6 +8,7 @@ require 'faraday/net_http_persistent'
 require 'json'
 require 'fileutils'
 require 'securerandom'
+require 'stringio'
 require 'time'
 require 'uri'
 
@@ -22,6 +23,7 @@ RESTGATE_UI_ENABLED = ENV.fetch('RESTGATE_UI_ENABLED', 'true').downcase == 'true
 RETENTION = ENV.fetch('RETENTION', '')
 BINARY_CONTENT_TYPE_PATTERN = /octet-stream|x-protobuf|image|video|audio|font|pdf|zip/
 BODYLESS_METHODS = %i[get head delete options].freeze
+REQUEST_BODY_ENV_KEY = 'restgate.request_body'.freeze
 HOP_BY_HOP_HEADERS = %w[
   connection keep-alive proxy-authenticate proxy-authorization public te trailer transfer-encoding upgrade
 ].freeze
@@ -79,11 +81,11 @@ use Rack.middleware_klass do |env, app|
 end
 use Rack::TempfileReaper
 use Rack.middleware_klass do |env, app|
-  input = Rack::RewindableInput.new(env['rack.input']) if env['rack.input']
-  env['rack.input'] = input if input
+  # Sinatra parses form parameters before routes, so preserve Falcon's one-pass input first.
+  request_body = env['rack.input']&.read.to_s.b
+  env[REQUEST_BODY_ENV_KEY] = request_body
+  env['rack.input'] = StringIO.new(request_body)
   app.call(env)
-ensure
-  input&.close
 end
 RestGate::UI.register_middleware(self) if RESTGATE_UI_ENABLED
 StackServiceBase.rack_setup self
@@ -312,13 +314,7 @@ helpers do
   end
 
   def read_request_body
-    body = request.body
-    return '' unless body
-
-    body.rewind if body.respond_to?(:rewind)
-    body.read.to_s.tap { body.rewind if body.respond_to?(:rewind) }
-  rescue EOFError
-    halt 400, 'Request body stream ended unexpectedly'
+    request.env.fetch(REQUEST_BODY_ENV_KEY)
   end
 
   def binary_content_type?(content_type) = content_type.to_s.match?(BINARY_CONTENT_TYPE_PATTERN)
