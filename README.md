@@ -42,9 +42,9 @@ For every proxied request, Rest Gate:
 5. Returns the upstream status, headers, and body to the caller.
 6. Stores the request/response pair when the active retention mode requires it.
 
-Rest Gate buffers request and response bodies in memory. It is intended primarily for development and diagnostics rather than high-volume streaming traffic.
+Rest Gate fully reads request and response bodies before completing a proxied request. It is intended primarily for development and diagnostics rather than high-volume streaming traffic.
 
-Request-body forwarding intentionally uses a single-pass path. JSON and other non-form payloads are forwarded without parameter re-encoding. Sinatra parses URL-encoded and multipart forms before the wildcard proxy route, so byte-for-byte form forwarding is not guaranteed by the current stable implementation and should not be enabled for a consumer without a dedicated integration test.
+JSON and other non-form payloads use the direct request-body path and are forwarded without parameter re-encoding. URL-encoded and multipart forms are made rewindable with a temporary-file buffer before Sinatra parses parameters, allowing the proxy to forward the original bytes and multipart boundary. This additional buffering and tempfile cleanup applies only to form content types.
 
 ## Quick start
 

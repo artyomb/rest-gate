@@ -22,6 +22,25 @@ class FakeProxyClient
   def build_url = URI("https://upstream.test")
 end
 
+class OnePassRequestBody < Protocol::HTTP::Body::Readable
+  def initialize(chunks)
+    @chunks = chunks
+    @closed = false
+  end
+
+  def read
+    return if @closed
+
+    @chunks.shift
+  end
+
+  def empty? = @chunks.empty?
+
+  def close(*)
+    @closed = true
+  end
+end
+
 RSpec.describe "Request and response logging", type: :request do
   let(:upstream_response) do
     FakeUpstreamResponse.new(
@@ -143,11 +162,12 @@ RSpec.describe "Request and response logging", type: :request do
 
   it "preserves JSON bodies and end-to-end headers through Falcon's Rack adapter" do
     request_body = '{"str":"UUBW"}'
+    protocol_body = OnePassRequestBody.new([request_body])
     protocol_request = Protocol::HTTP::Request[
       "POST",
       "/proxy/api/AeroData/search?str=UUBW",
       { "authorization" => "Bearer test-token", "content-type" => "application/json", "traceparent" => "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01" },
-      request_body,
+      protocol_body,
       scheme: "http",
       authority: "localhost"
     ]
@@ -163,8 +183,73 @@ RSpec.describe "Request and response logging", type: :request do
     response&.body&.close
   end
 
+  it "preserves a multipart form body from Falcon's one-pass request stream" do
+    boundary = "----RestGateBoundary"
+    request_body = [
+      "--#{boundary}\r\nContent-Disposition: form-data; name=\"description\"\r\n\r\nTEST\r\n",
+      "--#{boundary}\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\nTEST\r\n",
+      "--#{boundary}--\r\n"
+    ].join.b
+    protocol_body = OnePassRequestBody.new([
+      request_body.byteslice(0, 73),
+      request_body.byteslice(73, request_body.bytesize - 73)
+    ])
+    protocol_request = Protocol::HTTP::Request[
+      "POST",
+      "/proxy/api/streams",
+      {
+        "content-type" => "multipart/form-data; boundary=#{boundary}",
+        "content-length" => request_body.bytesize.to_s
+      },
+      protocol_body,
+      scheme: "http",
+      authority: "localhost"
+    ]
+    protocol_request.version = "HTTP/1.1"
+    adapter = Protocol::Rack::Adapter.new(app)
+
+    response = adapter.call(protocol_request)
+
+    expect(response.status).to eq(201)
+    expect(client.calls[0..2]).to eq([:post, "/api/streams", request_body])
+    expect(client.calls[3]).to include(
+      "Content-Type" => "multipart/form-data; boundary=#{boundary}"
+    )
+  ensure
+    response&.body&.close
+  end
+
+  it "preserves a URL-encoded form body from Falcon's one-pass request stream" do
+    request_body = "SectionCode=E&SubsectionCode=R&name=first%2Bsecond"
+    protocol_request = Protocol::HTTP::Request[
+      "POST",
+      "/proxy/api/form",
+      {
+        "content-type" => "application/x-www-form-urlencoded",
+        "content-length" => request_body.bytesize.to_s
+      },
+      OnePassRequestBody.new([request_body]),
+      scheme: "http",
+      authority: "localhost"
+    ]
+    protocol_request.version = "HTTP/1.1"
+    adapter = Protocol::Rack::Adapter.new(app)
+
+    response = adapter.call(protocol_request)
+
+    expect(response.status).to eq(201)
+    expect(client.calls[0..2]).to eq([:post, "/api/form", request_body])
+    expect(client.calls[3]).to include("Content-Type" => "application/x-www-form-urlencoded")
+  ensure
+    response&.body&.close
+  end
+
   it "forwards a bodyless POST when the server supplies no rack.input" do
-    env = Rack::MockRequest.env_for("/proxy/api/reload", method: "POST")
+    env = Rack::MockRequest.env_for(
+      "/proxy/api/reload",
+      method: "POST",
+      "CONTENT_TYPE" => "application/x-www-form-urlencoded"
+    )
     env["rack.input"] = nil
 
     status, _, response_body = app.call(env)
@@ -236,7 +321,7 @@ RSpec.describe "Request and response logging", type: :request do
       "/proxy" => upstream_config.merge(connection: FakeProxyClient.new(response))
     }
 
-    get "/proxy/api/items"
+    post "/proxy/api/items", "name=demo", { "CONTENT_TYPE" => "application/x-www-form-urlencoded" }
 
     expect(last_response.status).to eq(500)
     expect(last_response.body).to eq(response_body)

@@ -22,6 +22,7 @@ RESTGATE_UI_ENABLED = ENV.fetch('RESTGATE_UI_ENABLED', 'true').downcase == 'true
 RETENTION = ENV.fetch('RETENTION', '')
 BINARY_CONTENT_TYPE_PATTERN = /octet-stream|x-protobuf|image|video|audio|font|pdf|zip/
 BODYLESS_METHODS = %i[get head].freeze
+FORM_CONTENT_TYPES = %w[application/x-www-form-urlencoded multipart/form-data].freeze
 HOP_BY_HOP_HEADERS = %w[
   connection keep-alive proxy-authenticate proxy-authorization public te trailer transfer-encoding upgrade
 ].freeze
@@ -80,6 +81,20 @@ use Rack.middleware_klass do |env, app|
     headers.delete_if { |name, _| name.to_s.casecmp?('content-length') }
   end
   [status, headers, body]
+end
+
+# Sinatra parses form parameters before dispatching a route. Falcon supplies
+# live request bodies as one-pass streams, so retain a rewindable copy only for
+# content types Sinatra/Rack consume before the proxy handler can read them.
+use Rack.middleware_klass do |env, app|
+  content_type = env['CONTENT_TYPE'].to_s.split(';', 2).first.to_s.downcase
+  input = env['rack.input']
+  rewindable_input = Rack::RewindableInput.new(input) if input && FORM_CONTENT_TYPES.include?(content_type)
+  env['rack.input'] = rewindable_input if rewindable_input
+  request_app = rewindable_input ? Rack::TempfileReaper.new(app) : app
+  request_app.call(env)
+ensure
+  rewindable_input&.close
 end
 
 RestGate::UI.register_middleware(self) if RESTGATE_UI_ENABLED
