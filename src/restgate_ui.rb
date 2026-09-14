@@ -9,6 +9,7 @@ module RestGate
     PASSWORD = ENV.fetch('RESTGATE_UI_PASSWORD', '')
     BODY_PREVIEW_BYTES = Integer(ENV.fetch('RESTGATE_UI_BODY_PREVIEW_BYTES', '200000'), exception: false) || 200_000
     FILTER_KEYS = %w[q method prefix status query retention sort per_page page].freeze
+    PUBLIC_PATH_PATTERN = %r{\A(?<prefix>(?:/[A-Za-z0-9._~-]+)*)/_restgate(?:/|\z)}.freeze
     SENSITIVE_HEADERS = /\A(?:authorization|cookie|set-cookie|proxy-authorization|x-api-key|api-key)\z/i
     ASSETS = {
       'restgate.css' => ['text/css', File.expand_path('public/restgate.css', __dir__)],
@@ -147,12 +148,21 @@ helpers do
     )
   end
 
+  def restgate_public_path(path = '')
+    replaced_path = request.env['HTTP_X_REPLACED_PATH'].to_s
+    match = RestGate::UI::PUBLIC_PATH_PATTERN.match(replaced_path)
+    base_path = match ? "#{match[:prefix]}/_restgate" : '/_restgate'
+    suffix = path.to_s
+    suffix = "/#{suffix}" unless suffix.empty? || suffix.start_with?('/')
+    "#{base_path}#{suffix}"
+  end
+
   def restgate_list_url(overrides = {})
     values = RestGate::UI::FILTER_KEYS.to_h { [_1, @filters&.fetch(_1, '').to_s] }
     overrides.each { |key, value| values[key.to_s] = value.to_s }
     values.delete_if { |_, value| value.empty? }
     query = Rack::Utils.build_query(values)
-    query.empty? ? '/_restgate' : "/_restgate?#{query}"
+    query.empty? ? restgate_public_path : "#{restgate_public_path}?#{query}"
   end
 
   def restgate_detail_url(filename, overrides = {})
@@ -161,19 +171,20 @@ helpers do
     overrides.each do |key, value|
       value.to_s.empty? ? values.delete(key.to_s) : values[key.to_s] = value.to_s
     end
-    "/_restgate/logs/#{filename}?#{Rack::Utils.build_query(values)}"
+    "#{restgate_public_path("/logs/#{filename}")}?#{Rack::Utils.build_query(values)}"
   end
 
   def restgate_record_url(filename)
     query = Rack::Utils.build_query('back' => restgate_list_url)
-    "/_restgate/logs/#{filename}?#{query}"
+    "#{restgate_public_path("/logs/#{filename}")}?#{query}"
   end
 
   def restgate_back_url
     candidate = params['back'].to_s
-    return candidate if candidate.match?(%r{\A/_restgate(?:\?[^#]*)?\z})
+    public_path = restgate_public_path
+    return candidate if candidate.match?(%r{\A#{Regexp.escape(public_path)}(?:\?[^#]*)?\z})
 
-    '/_restgate'
+    public_path
   end
 
   def restgate_visible_headers(headers)

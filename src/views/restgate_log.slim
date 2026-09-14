@@ -13,10 +13,10 @@
       a.button.subtle href=restgate_detail_url(record.filename, 'reveal' => '') Hide sensitive headers
     - else
       a.button.subtle href=restgate_detail_url(record.filename, 'reveal' => '1') Reveal sensitive headers
-    a.button.subtle href="/_restgate/logs/#{record.filename}/raw" Download raw JSON
+    a.button.subtle href=restgate_public_path("/logs/#{record.filename}/raw") Download raw JSON
     - if record.body_file
-      a.button.subtle href="/_restgate/logs/#{record.filename}/body" target='_blank' rel='noopener' Open binary body
-    button.button.danger.destructive-action type='button' data-delete-record=true data-delete-url="/_restgate/logs/#{record.filename}" data-delete-return=restgate_back_url data-delete-label=record.display_path data-delete-attachment=(record.body_file ? 'true' : 'false') Delete record
+      a.button.subtle href=restgate_public_path("/logs/#{record.filename}/body") target='_blank' rel='noopener' Open binary body
+    button.button.danger.destructive-action type='button' data-delete-record=true data-delete-url=restgate_public_path("/logs/#{record.filename}") data-delete-return=restgate_back_url data-delete-label=record.display_path data-delete-attachment=(record.body_file ? 'true' : 'false') Delete record
 
 .status-strip aria-label='Record summary'
   .status-item class="status-#{restgate_status_tone(record.status)}"
@@ -164,7 +164,7 @@
             div
               strong Binary response body
               span = record.body_file
-            a.button.compact.subtle href="/_restgate/logs/#{record.filename}/body" target='_blank' rel='noopener' Open attachment
+            a.button.compact.subtle href=restgate_public_path("/logs/#{record.filename}/body") target='_blank' rel='noopener' Open attachment
         - elsif @response_body[:empty]
           p.empty-inline No response body was stored.
         - else

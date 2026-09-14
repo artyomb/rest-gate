@@ -179,7 +179,7 @@
         throw new Error(message || "The record could not be deleted.");
       });
     }).then(function () {
-      window.location.assign(button.dataset.deleteReturn || "/_restgate");
+      window.location.assign(button.dataset.deleteReturn || window.location.pathname);
     }).catch(function (error) {
       button.disabled = false;
       button.removeAttribute("aria-busy");

@@ -31,7 +31,7 @@ section.section aria-labelledby='filters-heading'
     div
       h2#filters-heading Search and filters
       p Search covers method, path, query, status, upstream, prefix, retention rule, content type, and filename.
-  form.filters action='/_restgate' method='get' data-filter-form=true
+  form.filters action=restgate_public_path method='get' data-filter-form=true
     - unless @filters['sort'].empty?
       input type='hidden' name='sort' value=@filters['sort']
     - unless @result.retentions.empty?
@@ -91,7 +91,7 @@ section.section aria-labelledby='filters-heading'
         input type='checkbox' data-auto-apply=true
         span Auto-apply
       button.primary type='submit' Apply
-      a.button.subtle href='/_restgate' Clear
+      a.button.subtle href=restgate_public_path Clear
 
 section.section aria-labelledby='path-statistics-heading'
   .section-header
@@ -140,7 +140,7 @@ section.section aria-labelledby='records-heading'
     .empty-state
       strong No stored logs match these filters.
       p Clear some filters or wait for matching traffic to arrive.
-      a.button.subtle href='/_restgate' Clear filters
+      a.button.subtle href=restgate_public_path Clear filters
   - else
     nav.mobile-sort-controls aria-label='Sort records'
       span.mobile-sort-label Sort:
@@ -193,10 +193,10 @@ section.section aria-labelledby='records-heading'
               td.numeric = restgate_bytes(record.bytes)
               td.actions-column
                 - if record.invalid?
-                  a.button.compact.subtle href="/_restgate/logs/#{record.filename}/raw" Raw
+                  a.button.compact.subtle href=restgate_public_path("/logs/#{record.filename}/raw") Raw
                 - else
                   a.button.compact.subtle href=restgate_record_url(record.filename) Open
-                button.button.compact.danger type='button' data-delete-record=true data-delete-url="/_restgate/logs/#{record.filename}" data-delete-return=restgate_list_url data-delete-label=(record.invalid? ? record.filename : record.display_path) data-delete-attachment=(record.body_file ? 'true' : 'false') Delete
+                button.button.compact.danger type='button' data-delete-record=true data-delete-url=restgate_public_path("/logs/#{record.filename}") data-delete-return=restgate_list_url data-delete-label=(record.invalid? ? record.filename : record.display_path) data-delete-attachment=(record.body_file ? 'true' : 'false') Delete
 
     .responsive-list
       - @result.records.each do |record|
@@ -224,10 +224,10 @@ section.section aria-labelledby='records-heading'
               span.kv-value = restgate_bytes(record.bytes)
           .card-actions
             - if record.invalid?
-              a.button.compact.subtle href="/_restgate/logs/#{record.filename}/raw" Download raw
+              a.button.compact.subtle href=restgate_public_path("/logs/#{record.filename}/raw") Download raw
             - else
               a.button.compact.subtle href=restgate_record_url(record.filename) Open record
-            button.button.compact.danger type='button' data-delete-record=true data-delete-url="/_restgate/logs/#{record.filename}" data-delete-return=restgate_list_url data-delete-label=(record.invalid? ? record.filename : record.display_path) data-delete-attachment=(record.body_file ? 'true' : 'false') Delete
+            button.button.compact.danger type='button' data-delete-record=true data-delete-url=restgate_public_path("/logs/#{record.filename}") data-delete-return=restgate_list_url data-delete-label=(record.invalid? ? record.filename : record.display_path) data-delete-attachment=(record.body_file ? 'true' : 'false') Delete
 
     - if @result.pages > 1
       nav.pagination aria-label='Record pages'

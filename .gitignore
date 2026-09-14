@@ -11,3 +11,4 @@ coverage
 src/log/
 AGENTS.md
 
+/debug_restgate/
