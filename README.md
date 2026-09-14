@@ -300,8 +300,9 @@ Host(`rest.example.test`) && PathPrefix(`/_restgate`)
 
 No path-replacement middleware is needed for this route. If the host's existing router already sends every path to Rest Gate, no additional ingress rule is necessary.
 
-### Escaping rules in configuration files
+The inspector also supports an external path prefix such as `/ani1/_restgate` when Traefik rewrites it to `/_restgate`. Traefik's `ReplacePathRegex` middleware supplies the original path in `X-Replaced-Path`; Rest Gate uses that header to keep assets, forms, record links, downloads, and delete actions under the same external prefix. Invalid or absent replacement paths fall back to `/_restgate`.
 
+### Escaping rules in configuration files
 Shell single quotes and YAML single-quoted scalars preserve regex backslashes:
 
 ```bash
@@ -412,7 +413,7 @@ Recognized binary content types include octet streams, protobuf, images, video, 
 
 Each upstream receives a persistent Faraday connection configured with:
 
-- request timeout: 15 seconds;
+- request timeout: 3600 seconds;
 - connection timeout: 10 seconds;
 - up to 2 retries with exponential backoff where Faraday's retry policy allows it;
 - connection pool size: 10;

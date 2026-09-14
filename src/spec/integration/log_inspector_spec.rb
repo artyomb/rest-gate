@@ -52,6 +52,39 @@ RSpec.describe 'Stored log inspector', type: :request do
     expect(last_response.headers.fetch('Content-Security-Policy')).to include("default-src 'self'")
   end
 
+  it 'keeps UI-owned URLs below a path prefix removed by the reverse proxy' do
+    get '/_restgate', {}, { 'HTTP_X_REPLACED_PATH' => '/ani1/_restgate' }
+
+    expect(last_response.status).to eq(200)
+    expect(last_response.body).to include(
+      'href="/ani1/_restgate/assets/restgate.css"',
+      'src="/ani1/_restgate/assets/restgate.js"',
+      'action="/ani1/_restgate"',
+      "data-delete-url=\"/ani1/_restgate/logs/#{filename}\""
+    )
+    expect(last_response.body).not_to include(
+      'href="/_restgate',
+      'src="/_restgate',
+      'action="/_restgate',
+      'data-delete-url="/_restgate'
+    )
+
+    get "/_restgate/logs/#{filename}", {}, {
+      'HTTP_X_REPLACED_PATH' => "/ani1/_restgate/logs/#{filename}"
+    }
+    expect(last_response.body).to include(
+      "href=\"/ani1/_restgate/logs/#{filename}/raw\"",
+      'data-delete-return="/ani1/_restgate"'
+    )
+  end
+
+  it 'ignores an invalid externally replaced UI path' do
+    get '/_restgate', {}, { 'HTTP_X_REPLACED_PATH' => '//example.test/_restgate' }
+
+    expect(last_response.body).to include('href="/_restgate/assets/restgate.css"')
+    expect(last_response.body).not_to include('//example.test/_restgate')
+  end
+
   it 'combines retention filtering with current filters and renders path statistics' do
     get '/_restgate', retention:, method: 'POST', query: 'present'
 
