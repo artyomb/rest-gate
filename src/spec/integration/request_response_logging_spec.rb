@@ -102,6 +102,18 @@ RSpec.describe "Request and response logging", type: :request do
     expect(query_pairs).to include(["text", "UUBW"])
   end
 
+  it "uses configurable upstream timeouts without automatic retries" do
+    connection = @configured_clients.values.first.fetch(:connection)
+
+    expect(connection.options.timeout).to eq(UPSTREAM_REQUEST_TIMEOUT_SECONDS)
+    expect(connection.options.open_timeout).to eq(UPSTREAM_CONNECT_TIMEOUT_SECONDS)
+    expect(connection.builder.handlers.map(&:name)).not_to include("Faraday::Retry::Middleware")
+  end
+
+  it "does not add Sinatra's redundant response body proxy" do
+    expect(Sinatra::Application.settings.logging).to be(false)
+  end
+
   it "writes request and response to a dedicated log file" do
     header "X-Trace-Id", "trace-123"
 

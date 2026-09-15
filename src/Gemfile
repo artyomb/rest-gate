@@ -3,7 +3,6 @@ source 'https://rubygems.org'
 gem 'sinatra'
 gem 'slim'
 gem 'faraday'
-gem 'faraday-retry', '~> 2.2'
 gem 'faraday-net_http_persistent', '~> 2.0'
 
 gem 'rack', '~> 3.1.13'

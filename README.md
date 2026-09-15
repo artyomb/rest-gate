@@ -24,7 +24,7 @@ The service is useful when an existing application must continue working normall
 - Removes a configured public prefix and optionally prepends an upstream base path.
 - Preserves query strings, request bodies, response bodies, status codes, and end-to-end headers.
 - Supports `GET`, `POST`, `PUT`, `DELETE`, `HEAD`, and `PATCH`.
-- Uses persistent upstream HTTP connections with retry and timeout settings.
+- Uses persistent upstream HTTP connections with configurable timeout settings.
 - Stores request/response metadata and textual bodies in JSON files.
 - Stores binary response bodies in sidecar files.
 - Supports time-based retention for all traffic or count-based retention for selected traffic.
@@ -106,6 +106,8 @@ The upstream hostname must be resolvable inside the container network.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PROXY_MAP` | `/api:http://example.ru/base/path/api` | Comma-separated mapping of incoming path prefixes to upstream targets. |
+| `UPSTREAM_REQUEST_TIMEOUT_SECONDS` | `3600` | Maximum time to wait for an upstream response. Must be a positive number. |
+| `UPSTREAM_CONNECT_TIMEOUT_SECONDS` | `10` | Maximum time to establish an upstream connection. Must be a positive number. |
 | `REQUEST_RESPONSE_LOG_DIR` | `src/log/request_responses` locally; `/app/log/request_responses` in the image | Directory used for JSON records and binary response sidecars. Created at startup. |
 | `REQUEST_RESPONSE_LOG_BODY_LIMIT` | `0` | Maximum number of bytes stored for a textual body. `0` or a negative value means unlimited. |
 | `REQUEST_RESPONSE_LOG_TTL_SECONDS` | `3600` | Maximum file age in time-based mode. `0` or a negative value disables expiry. |
@@ -117,7 +119,7 @@ The upstream hostname must be resolvable inside the container network.
 | `RESTGATE_UI_BODY_PREVIEW_BYTES` | `200000` | Maximum request or response body bytes rendered on a detail page. `0` or a negative value means unlimited. |
 | `PORT` | `7000` in the Docker image | Listening port used by the image command. |
 
-Invalid `PROXY_MAP` entries, malformed `RETENTION` rules, invalid retention regular expressions, and an incomplete UI username/password pair while the UI is enabled cause startup to fail with an explanatory error.
+Invalid `PROXY_MAP` entries, malformed `RETENTION` rules, invalid retention regular expressions, non-positive or non-numeric upstream timeout values, and an incomplete UI username/password pair while the UI is enabled cause startup to fail with an explanatory error.
 
 ## Proxy mapping
 
@@ -413,11 +415,12 @@ Recognized binary content types include octet streams, protobuf, images, video, 
 
 Each upstream receives a persistent Faraday connection configured with:
 
-- request timeout: 3600 seconds;
-- connection timeout: 10 seconds;
-- up to 2 retries with exponential backoff where Faraday's retry policy allows it;
+- request timeout: `UPSTREAM_REQUEST_TIMEOUT_SECONDS` (3600 seconds by default);
+- connection timeout: `UPSTREAM_CONNECT_TIMEOUT_SECONDS` (10 seconds by default);
 - connection pool size: 10;
 - persistent-connection idle timeout: 60 seconds.
+
+Rest Gate does not automatically retry upstream requests. Retry policy remains with the original caller, which avoids duplicating long-running or state-changing operations.
 
 There is no response cache or fallback upstream. An upstream connection failure is returned through the application's normal error handling.
 

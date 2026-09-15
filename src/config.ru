@@ -3,7 +3,6 @@ ENV['NO_RT_DEBUG'] ||= 'true'
 require 'stack-service-base'
 require 'sinatra'
 require 'faraday'
-require 'faraday/retry'
 require 'faraday/net_http_persistent'
 require 'json'
 require 'fileutils'
@@ -12,6 +11,8 @@ require 'time'
 require 'uri'
 
 DEFAULT_UPSTREAM_PORT = 80
+UPSTREAM_REQUEST_TIMEOUT_SECONDS = Float(ENV.fetch('UPSTREAM_REQUEST_TIMEOUT_SECONDS', '3600'), exception: false)
+UPSTREAM_CONNECT_TIMEOUT_SECONDS = Float(ENV.fetch('UPSTREAM_CONNECT_TIMEOUT_SECONDS', '10'), exception: false)
 PROXY_MAP = ENV.fetch 'PROXY_MAP', '/api:http://example.ru/base/path/api' # "/prefix:host[:port]" or "/prefix:https://host[:port]/base/path"
 REQUEST_RESPONSE_LOG_DIR = ENV.fetch('REQUEST_RESPONSE_LOG_DIR', File.expand_path('log/request_responses', __dir__))
 REQUEST_RESPONSE_LOG_BODY_LIMIT = Integer(ENV.fetch('REQUEST_RESPONSE_LOG_BODY_LIMIT', '0'), exception: false) || 0
@@ -28,6 +29,13 @@ HOP_BY_HOP_HEADERS = %w[
 ].freeze
 REQUEST_HEADERS_TO_SKIP = (HOP_BY_HOP_HEADERS + %w[host proxy-connection content-length accept-encoding]).freeze
 RESPONSE_HEADERS_TO_SKIP = (HOP_BY_HOP_HEADERS + %w[proxy-connection content-length]).freeze
+
+{
+  'UPSTREAM_REQUEST_TIMEOUT_SECONDS' => UPSTREAM_REQUEST_TIMEOUT_SECONDS,
+  'UPSTREAM_CONNECT_TIMEOUT_SECONDS' => UPSTREAM_CONNECT_TIMEOUT_SECONDS
+}.each do |name, value|
+  raise ArgumentError, "#{name} must be a positive number" unless value&.positive?
+end
 
 module Retention
   module_function
@@ -201,16 +209,19 @@ class RetentionStore
 end
 
 configure do
+  # StackServiceBase already owns request logging. Sinatra's logger would only
+  # wrap response bodies and make 5xx telemetry report Rack::BodyProxy objects.
+  disable :logging
+
   proxy_map = parse_proxy_map(PROXY_MAP)
   set :http_clients, proxy_map.transform_values {
     {
       path_prefix: _1.fetch(:path_prefix),
       url: _1.fetch(:url),
       connection: Faraday.new(url: "#{_1.fetch(:scheme)}://#{_1.fetch(:host)}:#{_1.fetch(:port)}") do |f|
-        f.request  :retry, max: 2, interval: 0.2, backoff_factor: 2
         f.options.params_encoder = Faraday::FlatParamsEncoder
-        f.options.timeout      = 3600
-        f.options.open_timeout = 10
+        f.options.timeout = UPSTREAM_REQUEST_TIMEOUT_SECONDS
+        f.options.open_timeout = UPSTREAM_CONNECT_TIMEOUT_SECONDS
         f.adapter :net_http_persistent, pool_size: 10, idle_timeout: 60
       end
     }
