@@ -9,6 +9,9 @@ require 'fileutils'
 require 'securerandom'
 require 'time'
 require 'uri'
+require_relative 'client_idle_timeout'
+
+RestGate::ClientIdleTimeout.install!
 
 DEFAULT_UPSTREAM_PORT = 80
 UPSTREAM_REQUEST_TIMEOUT_SECONDS = Float(ENV.fetch('UPSTREAM_REQUEST_TIMEOUT_SECONDS', '3600'), exception: false)

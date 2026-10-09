@@ -108,6 +108,7 @@ The upstream hostname must be resolvable inside the container network.
 | `PROXY_MAP` | `/api:http://example.ru/base/path/api` | Comma-separated mapping of incoming path prefixes to upstream targets. |
 | `UPSTREAM_REQUEST_TIMEOUT_SECONDS` | `3600` | Maximum time to wait for an upstream response. Must be a positive number. |
 | `UPSTREAM_CONNECT_TIMEOUT_SECONDS` | `10` | Maximum time to establish an upstream connection. Must be a positive number. |
+| `CLIENT_IDLE_TIMEOUT_SECONDS` | `60` | Falcon HTTP/1 connection idle limit while awaiting the first byte of the next request. `0` disables expiry. Must be a finite non-negative number. Active requests and responses are not subject to this limit. |
 | `REQUEST_RESPONSE_LOG_DIR` | `src/log/request_responses` locally; `/app/log/request_responses` in the image | Directory used for JSON records and binary response sidecars. Created at startup. |
 | `REQUEST_RESPONSE_LOG_BODY_LIMIT` | `0` | Maximum number of bytes stored for a textual body. `0` or a negative value means unlimited. |
 | `REQUEST_RESPONSE_LOG_TTL_SECONDS` | `3600` | Maximum file age in time-based mode. `0` or a negative value disables expiry. |
@@ -119,7 +120,19 @@ The upstream hostname must be resolvable inside the container network.
 | `RESTGATE_UI_BODY_PREVIEW_BYTES` | `200000` | Maximum request or response body bytes rendered on a detail page. `0` or a negative value means unlimited. |
 | `PORT` | `7000` in the Docker image | Listening port used by the image command. |
 
-Invalid `PROXY_MAP` entries, malformed `RETENTION` rules, invalid retention regular expressions, non-positive or non-numeric upstream timeout values, and an incomplete UI username/password pair while the UI is enabled cause startup to fail with an explanatory error.
+Invalid `PROXY_MAP` entries, malformed `RETENTION` rules, invalid retention regular expressions, invalid timeout values, and an incomplete UI username/password pair while the UI is enabled cause startup to fail with an explanatory error.
+
+### Incoming connection reuse
+
+Falcon keeps incoming HTTP/1 connections reusable while requests continue to arrive. Once a response and its request body are finished, `CLIENT_IDLE_TIMEOUT_SECONDS` limits only the wait for a new request's first byte. Idle expiry ends the server connection normally, without generating a timeout response. Clients normally remove the closed socket from their pools and establish a fresh connection for the next request. A request racing with closure can still encounter a transport error.
+
+Request parsing, uploads, upstream processing and response delivery are outside this idle deadline, even when they take longer than the configured value. The limit also applies to newly accepted connections that have not yet sent a request. Buffered/pipelined requests do not wait for another socket read. HTTP/2 and upgraded connections are not affected.
+
+The HTTP/1 server hook lives in `src/client_idle_timeout.rb`; socket-level behaviour is covered by real Falcon TCP tests. Do not replace it with Falcon's general socket-operation timeout, which is not an idle-only limit. Choose an idle limit shorter than the network's idle expiry if known; the default is not a guarantee for every network. Setting `0` restores the previous unlimited wait.
+
+This does not change Faraday's persistent upstream connections, response/connect timeouts, or retry policy. It does not add `Connection: close` to every response, so frequent client requests continue to reuse their connections.
+
+The local proxy demo was also verified with Reactor Netty 1.2.18 and retries disabled: four frequent requests reused one client connection, the next request reconnected after idle expiry, a 7,620,072-byte binary response arrived intact, and a backend operation longer than the idle limit completed. Faraday used one backend connection for all six requests. This verifies client/proxy behaviour locally; the deployed Swarm network still needs observation after rollout. Startup DNS failures are separate from idle-connection expiry.
 
 ## Proxy mapping
 
